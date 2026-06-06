@@ -1,0 +1,15 @@
+appId: build.conductor.linux
+productName: Conductor Linux
+directories:
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+asarUnpack:
+  - '**/node_modules/node-pty/**'
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Development
+npmRebuild: true
