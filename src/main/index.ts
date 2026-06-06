@@ -3,6 +3,7 @@ import { join } from 'path'
 import { initStore } from './store'
 import { registerIpc } from './ipc'
 import { killAll, setMainWindow } from './ptyManager'
+import { restoreSessions } from './workspaces'
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -38,6 +39,7 @@ function createWindow(): void {
 app.whenReady().then(() => {
   initStore()
   registerIpc()
+  restoreSessions()
   createWindow()
 
   app.on('activate', () => {

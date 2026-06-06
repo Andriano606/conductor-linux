@@ -13,6 +13,8 @@ export interface Settings {
   runScript: string
   /** Absolute path to the archive script (runs before a workspace is archived). */
   archiveScript: string
+  /** Command used to open a workspace in an editor/IDE, e.g. "code", "cursor". */
+  ideCommand: string
 }
 
 export type WorkspaceStatus = 'setting_up' | 'active' | 'archiving' | 'archived'

@@ -1,6 +1,7 @@
-import { BrowserWindow, dialog, ipcMain } from 'electron'
+import { spawn } from 'child_process'
+import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import type { PtyKind, Settings } from '../shared/types'
-import { getSettings, getWorkspaces, setSettings } from './store'
+import { getSettings, getWorkspace, getWorkspaces, setSettings } from './store'
 import { isGitRepo } from './git'
 import { attach, resize, stopTask, write } from './ptyManager'
 import { beginArchive, createWorkspace, finishArchive, finishSetup, runWorkspace } from './workspaces'
@@ -42,6 +43,27 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('workspace:stop', (_e, id: string) => stopTask(id))
+
+  // Open the workspace's running app (served on its CONDUCTOR_PORT) in the
+  // system's default browser.
+  ipcMain.handle('workspace:openInBrowser', (_e, id: string) => {
+    const ws = getWorkspace(id)
+    if (ws) void shell.openExternal(`http://localhost:${ws.port}`)
+  })
+
+  // Open the workspace's worktree in the configured IDE. Runs through a login
+  // shell so editor launchers on PATH (code, cursor, subl, …) resolve, and is
+  // detached so the IDE outlives this app.
+  ipcMain.handle('workspace:openInIde', (_e, id: string) => {
+    const ws = getWorkspace(id)
+    const ide = getSettings().ideCommand
+    if (!ws || !ide) return
+    const child = spawn('/bin/bash', ['-lc', `${ide} ${JSON.stringify(ws.path)}`], {
+      detached: true,
+      stdio: 'ignore'
+    })
+    child.unref()
+  })
 
   ipcMain.handle('workspace:archive', (_e, id: string) => {
     // Non-blocking: mark archiving now, do the slow work (script + worktree

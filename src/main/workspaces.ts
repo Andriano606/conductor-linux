@@ -60,7 +60,9 @@ export async function createWorkspace(name: string): Promise<Workspace> {
 
   const ws: Workspace = {
     id: randomUUID(),
-    name: name.trim() || slug,
+    // Use the deduplicated slug so the name matches the real worktree dir/branch
+    // (e.g. "porto-2" when "porto" was taken), not the raw input.
+    name: candidate,
     branch,
     path: wtPath,
     port: nextPort(),
@@ -97,6 +99,20 @@ export async function finishSetup(id: string, onChange: () => void): Promise<voi
     updateWorkspaceStatus(ws.id, 'active')
     startClaude({ id: ws.id, cwd: ws.path, env, cols: 80, rows: 24 })
     onChange()
+  }
+}
+
+/**
+ * Re-start the Claude session for every active workspace whose worktree still
+ * exists. Called on app launch so the consoles come back after a restart (PTYs
+ * live only in memory and are killed when the app closes). Idempotent.
+ */
+export function restoreSessions(): void {
+  const settings = getSettings()
+  for (const ws of getWorkspaces()) {
+    if (ws.status !== 'active') continue
+    if (!existsSync(ws.path)) continue
+    startClaude({ id: ws.id, cwd: ws.path, env: buildEnv(ws, settings), cols: 80, rows: 24 })
   }
 }
 

@@ -22,6 +22,8 @@ interface AppState {
   createWorkspace: (name: string) => Promise<void>
   runActive: () => Promise<void>
   stopActive: () => Promise<void>
+  openActiveInBrowser: () => void
+  openActiveInIde: () => void
   archiveActive: () => Promise<void>
   setRunning: (id: string, running: boolean) => void
   setWorkspaces: (ws: Workspace[]) => void
@@ -93,6 +95,16 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (e) {
       set({ error: (e as Error).message })
     }
+  },
+
+  openActiveInBrowser: () => {
+    const id = get().activeId
+    if (id) void window.api.openInBrowser(id)
+  },
+
+  openActiveInIde: () => {
+    const id = get().activeId
+    if (id) void window.api.openInIde(id)
   },
 
   setRunning: (id, running) =>

@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "description": "Run Claude Code sessions in parallel, each in an isolated git worktree (Linux clone of conductor.build)",
   "main": "./out/main/index.js",
-  "author": "andrii",
+  "author": {
+    "name": "andrii",
+    "email": "andrii.kuluiev@partingpro.com"
+  },
   "license": "MIT",
   "scripts": {
     "dev": "electron-vite dev",

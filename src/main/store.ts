@@ -19,7 +19,8 @@ function defaults(): PersistedData {
       startPort: 3002,
       setupScript: '',
       runScript: '',
-      archiveScript: ''
+      archiveScript: '',
+      ideCommand: ''
     },
     workspaces: []
   }

@@ -2,7 +2,13 @@ import { useEffect, useState } from 'react'
 import type { Settings } from '@shared/types'
 import { useStore } from '../store'
 
-type PathField = 'repoPath' | 'worktreesDir' | 'setupScript' | 'runScript' | 'archiveScript'
+type PathField =
+  | 'repoPath'
+  | 'worktreesDir'
+  | 'setupScript'
+  | 'runScript'
+  | 'archiveScript'
+  | 'ideCommand'
 
 export function SettingsModal(): JSX.Element {
   const { settings, saveSettings, openSettings } = useStore()
@@ -13,7 +19,8 @@ export function SettingsModal(): JSX.Element {
       startPort: 3002,
       setupScript: '',
       runScript: '',
-      archiveScript: ''
+      archiveScript: '',
+      ideCommand: ''
     }
   )
   const [repoValid, setRepoValid] = useState<boolean | null>(null)
@@ -50,7 +57,13 @@ export function SettingsModal(): JSX.Element {
     form.startPort >= 1024 &&
     form.startPort <= 65535
 
-  const fields: { key: PathField; label: string; dir: boolean; hint: string }[] = [
+  const fields: {
+    key: PathField
+    label: string
+    dir: boolean
+    hint: string
+    placeholder?: string
+  }[] = [
     {
       key: 'repoPath',
       label: 'Репозиторій (git)',
@@ -80,6 +93,13 @@ export function SettingsModal(): JSX.Element {
       label: 'Archive-скрипт',
       dir: false,
       hint: 'Виконується перед архівацією воркспейсу.'
+    },
+    {
+      key: 'ideCommand',
+      label: 'IDE',
+      dir: false,
+      placeholder: 'code',
+      hint: 'Команда для відкриття воркспейсу, напр. code, cursor, subl, webstorm. Шлях до воркспейсу передається аргументом.'
     }
   ]
 
@@ -93,7 +113,7 @@ export function SettingsModal(): JSX.Element {
             <div className="row">
               <input
                 value={form[f.key]}
-                placeholder={f.dir ? '/шлях/до/директорії' : '/шлях/до/скрипта.sh'}
+                placeholder={f.placeholder ?? (f.dir ? '/шлях/до/директорії' : '/шлях/до/скрипта.sh')}
                 onChange={(e) => set(f.key, e.target.value)}
               />
               <button className="btn" onClick={() => void browse(f.key, f.dir)}>

@@ -2,7 +2,19 @@ import { useStore } from '../store'
 import type { Workspace } from '@shared/types'
 
 export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
-  const { activeKind, setKind, runActive, stopActive, archiveActive, busy, runningById } = useStore()
+  const {
+    activeKind,
+    setKind,
+    runActive,
+    stopActive,
+    openActiveInBrowser,
+    openActiveInIde,
+    archiveActive,
+    busy,
+    runningById,
+    settings
+  } = useStore()
+  const ideConfigured = !!settings?.ideCommand
   const settingUp = ws.status === 'setting_up'
   const archiving = ws.status === 'archiving'
   const running = !!runningById[ws.id]
@@ -39,6 +51,30 @@ export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
             ▶ Run
           </button>
         )}
+        <button
+          className="btn"
+          onClick={openActiveInBrowser}
+          disabled={!running}
+          title={
+            running
+              ? `Відкрити http://localhost:${ws.port} у браузері`
+              : 'Спочатку запусти run-скрипт'
+          }
+        >
+          🌐 У браузері
+        </button>
+        <button
+          className="btn"
+          onClick={openActiveInIde}
+          disabled={settingUp || archiving || !ideConfigured}
+          title={
+            ideConfigured
+              ? `Відкрити воркспейс у «${settings?.ideCommand}»`
+              : 'Вкажи IDE в налаштуваннях'
+          }
+        >
+          ⧉ Відкрити в IDE
+        </button>
         <button className="btn danger" onClick={archive} disabled={archiving}>
           {archiving ? 'Архівується…' : 'Архівувати'}
         </button>

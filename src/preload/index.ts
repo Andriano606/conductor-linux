@@ -15,6 +15,8 @@ const api = {
     ipcRenderer.invoke('workspace:create', name),
   runWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:run', id),
   stopWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:stop', id),
+  openInBrowser: (id: string): Promise<void> => ipcRenderer.invoke('workspace:openInBrowser', id),
+  openInIde: (id: string): Promise<void> => ipcRenderer.invoke('workspace:openInIde', id),
   archiveWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:archive', id),
   onTaskRunning: (cb: (d: { id: string; running: boolean }) => void): (() => void) => {
     const listener = (_e: unknown, d: { id: string; running: boolean }): void => cb(d)
