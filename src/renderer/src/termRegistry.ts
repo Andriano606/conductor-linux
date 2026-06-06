@@ -27,10 +27,14 @@ function ensure(id: string, kind: PtyKind): TermEntry {
   const wrapper = document.createElement('div')
   wrapper.className = 'term-mount'
 
+  // The "task" terminal (setup/run/archive output) is read-only so the user
+  // can't accidentally kill the running app with Ctrl+C or stray keystrokes.
+  const readOnly = kind === 'task'
   const term = new Terminal({
     fontFamily: 'JetBrains Mono, Menlo, Consolas, monospace',
     fontSize: 13,
-    cursorBlink: true,
+    cursorBlink: !readOnly,
+    disableStdin: readOnly,
     scrollback: 10000,
     theme: { background: '#1e1e1e', foreground: '#d7dae0' }
   })
@@ -38,7 +42,7 @@ function ensure(id: string, kind: PtyKind): TermEntry {
   term.loadAddon(fit)
   term.open(wrapper)
 
-  term.onData((d) => window.api.sendInput(id, kind, d))
+  if (!readOnly) term.onData((d) => window.api.sendInput(id, kind, d))
 
   e = { wrapper, term, fit }
   terms.set(k, e)

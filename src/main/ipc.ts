@@ -2,8 +2,8 @@ import { BrowserWindow, dialog, ipcMain } from 'electron'
 import type { PtyKind, Settings } from '../shared/types'
 import { getSettings, getWorkspaces, setSettings } from './store'
 import { isGitRepo } from './git'
-import { attach, resize, write } from './ptyManager'
-import { archiveWorkspace, createWorkspace, finishSetup, runWorkspace } from './workspaces'
+import { attach, resize, stopTask, write } from './ptyManager'
+import { beginArchive, createWorkspace, finishArchive, finishSetup, runWorkspace } from './workspaces'
 
 function notifyWorkspacesChanged(): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -41,9 +41,14 @@ export function registerIpc(): void {
     await runWorkspace(id)
   })
 
-  ipcMain.handle('workspace:archive', async (_e, id: string) => {
-    await archiveWorkspace(id)
+  ipcMain.handle('workspace:stop', (_e, id: string) => stopTask(id))
+
+  ipcMain.handle('workspace:archive', (_e, id: string) => {
+    // Non-blocking: mark archiving now, do the slow work (script + worktree
+    // removal) in the background, then notify when the workspace is dropped.
+    beginArchive(id)
     notifyWorkspacesChanged()
+    void finishArchive(id, notifyWorkspacesChanged)
   })
 
   // ---- PTY ----

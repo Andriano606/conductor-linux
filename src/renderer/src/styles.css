@@ -204,6 +204,12 @@ button {
   border-color: var(--green);
   color: #0c2417;
 }
+.btn.stop {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #2a0c11;
+  font-weight: 600;
+}
 .btn.danger {
   color: var(--danger);
 }

@@ -15,7 +15,7 @@ export interface Settings {
   archiveScript: string
 }
 
-export type WorkspaceStatus = 'setting_up' | 'active' | 'archived'
+export type WorkspaceStatus = 'setting_up' | 'active' | 'archiving' | 'archived'
 
 export interface Workspace {
   id: string

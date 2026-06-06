@@ -10,6 +10,8 @@ interface AppState {
   showNew: boolean
   busy: boolean
   error: string | null
+  /** Whether a run script is currently active, per workspace id. */
+  runningById: Record<string, boolean>
 
   load: () => Promise<void>
   setActive: (id: string) => void
@@ -19,7 +21,9 @@ interface AppState {
   saveSettings: (s: Settings) => Promise<void>
   createWorkspace: (name: string) => Promise<void>
   runActive: () => Promise<void>
+  stopActive: () => Promise<void>
   archiveActive: () => Promise<void>
+  setRunning: (id: string, running: boolean) => void
   setWorkspaces: (ws: Workspace[]) => void
   clearError: () => void
 }
@@ -33,6 +37,7 @@ export const useStore = create<AppState>((set, get) => ({
   showNew: false,
   busy: false,
   error: null,
+  runningById: {},
 
   load: async () => {
     const [settings, workspaces] = await Promise.all([
@@ -71,26 +76,38 @@ export const useStore = create<AppState>((set, get) => ({
   runActive: async () => {
     const id = get().activeId
     if (!id) return
-    set({ error: null, activeKind: 'task' })
+    // Optimistically flip to Stop; main confirms via the task:running event.
+    set((s) => ({ error: null, activeKind: 'task', runningById: { ...s.runningById, [id]: true } }))
     try {
       await window.api.runWorkspace(id)
+    } catch (e) {
+      set((s) => ({ error: (e as Error).message, runningById: { ...s.runningById, [id]: false } }))
+    }
+  },
+
+  stopActive: async () => {
+    const id = get().activeId
+    if (!id) return
+    try {
+      await window.api.stopWorkspace(id)
     } catch (e) {
       set({ error: (e as Error).message })
     }
   },
 
+  setRunning: (id, running) =>
+    set((s) => ({ runningById: { ...s.runningById, [id]: running } })),
+
   archiveActive: async () => {
     const id = get().activeId
     if (!id) return
-    set({ busy: true, error: null })
+    // Non-blocking: show the archive output; the workspace drops out of the list
+    // (and the active one switches) via the workspaces:changed event when done.
+    set({ error: null, activeKind: 'task' })
     try {
       await window.api.archiveWorkspace(id)
-      const remaining = get().workspaces.filter((w) => w.id !== id)
-      set({ activeId: remaining[0]?.id ?? null, activeKind: 'claude' })
     } catch (e) {
       set({ error: (e as Error).message })
-    } finally {
-      set({ busy: false })
     }
   },
 

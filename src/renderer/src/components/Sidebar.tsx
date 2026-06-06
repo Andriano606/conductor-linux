@@ -30,6 +30,7 @@ export function Sidebar(): JSX.Element {
               <div className="name">
                 {w.name}
                 {w.status === 'setting_up' && <span className="ws-badge">⏳ налаштування…</span>}
+                {w.status === 'archiving' && <span className="ws-badge">📦 архівується…</span>}
               </div>
               <div className="meta">
                 {w.branch} · :{w.port}

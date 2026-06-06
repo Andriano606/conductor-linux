@@ -113,34 +113,44 @@ export async function runWorkspace(id: string): Promise<void> {
     cwd: ws.path,
     env: buildEnv(ws, settings),
     cols: 80,
-    rows: 24
+    rows: 24,
+    track: true
   })
 }
 
-/** Archive a workspace: run the archive script, kill PTYs, remove the worktree. */
-export async function archiveWorkspace(id: string): Promise<void> {
+/** Mark a workspace as archiving so the UI updates immediately (non-blocking). */
+export function beginArchive(id: string): void {
+  if (getWorkspace(id)) updateWorkspaceStatus(id, 'archiving')
+}
+
+/**
+ * Run the archive script, kill PTYs and remove the worktree in the background.
+ * Calls onChange when the workspace is finally dropped from the list.
+ */
+export async function finishArchive(id: string, onChange: () => void): Promise<void> {
   const settings = getSettings()
   const ws = getWorkspace(id)
-  if (!ws) throw new Error('Workspace not found')
+  if (!ws) return
 
-  if (settings.archiveScript) {
-    await runTask({
-      id: ws.id,
-      scriptPath: settings.archiveScript,
-      label: 'archive',
-      cwd: ws.path,
-      env: buildEnv(ws, settings),
-      cols: 80,
-      rows: 24
-    })
-  }
-
-  killWorkspace(ws.id)
   try {
+    if (settings.archiveScript) {
+      await runTask({
+        id: ws.id,
+        scriptPath: settings.archiveScript,
+        label: 'archive',
+        cwd: ws.path,
+        env: buildEnv(ws, settings),
+        cols: 80,
+        rows: 24
+      })
+    }
+    killWorkspace(ws.id)
     await worktreeRemove(settings.repoPath, ws.path)
   } catch (err) {
-    // Surface the error but still drop the workspace from the list so the UI is consistent.
-    console.error('worktree remove failed:', err)
+    // Surface the error but still drop the workspace so the UI stays consistent.
+    console.error('archive failed:', err)
+  } finally {
+    removeWorkspace(ws.id)
+    onChange()
   }
-  removeWorkspace(ws.id)
 }

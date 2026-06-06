@@ -14,7 +14,13 @@ const api = {
   createWorkspace: (name: string): Promise<Workspace> =>
     ipcRenderer.invoke('workspace:create', name),
   runWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:run', id),
+  stopWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:stop', id),
   archiveWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:archive', id),
+  onTaskRunning: (cb: (d: { id: string; running: boolean }) => void): (() => void) => {
+    const listener = (_e: unknown, d: { id: string; running: boolean }): void => cb(d)
+    ipcRenderer.on('task:running', listener)
+    return () => ipcRenderer.removeListener('task:running', listener)
+  },
   onWorkspacesChanged: (cb: (workspaces: Workspace[]) => void): (() => void) => {
     const listener = (_e: unknown, workspaces: Workspace[]): void => cb(workspaces)
     ipcRenderer.on('workspaces:changed', listener)

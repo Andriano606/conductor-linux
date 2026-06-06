@@ -7,6 +7,8 @@ interface Entry {
   /** When true, live output is forwarded to the renderer. Flips on attach. */
   streaming: boolean
   proc?: pty.IPty
+  /** Current task proc is a tracked "run" (drives the Run/Stop button). */
+  tracked?: boolean
 }
 
 const MAX_BUFFER = 500_000
@@ -40,9 +42,16 @@ function wire(id: string, kind: PtyKind, e: Entry, proc: pty.IPty): void {
     }
   })
   proc.onExit(({ exitCode }) => {
-    e.proc = undefined
+    // A newer proc may have replaced this one (e.g. run restarted); only the
+    // current proc should clear state and emit lifecycle events.
+    const superseded = e.proc !== proc
+    if (!superseded) e.proc = undefined
     if (mainWC && !mainWC.isDestroyed()) {
       mainWC.send('pty:exit', { id, kind, exitCode })
+      if (kind === 'task' && !superseded && e.tracked) {
+        e.tracked = false
+        mainWC.send('task:running', { id, running: false })
+      }
     }
   })
 }
@@ -80,6 +89,8 @@ export function runTask(opts: {
   env: NodeJS.ProcessEnv
   cols: number
   rows: number
+  /** When true, this is the long-running "run" — drives the Run/Stop button. */
+  track?: boolean
 }): Promise<number> {
   const e = ensure(opts.id, 'task')
   if (e.proc) {
@@ -88,7 +99,6 @@ export function runTask(opts: {
     } catch {
       /* ignore */
     }
-    e.proc = undefined
   }
   const q = JSON.stringify
   const cmd = `printf '\\n\\033[1;36m▶ %s\\033[0m\\n' ${q(opts.label)}; bash ${q(opts.scriptPath)}; code=$?; printf '\\033[1;36m[%s exited %s]\\033[0m\\n' ${q(opts.label)} "$code"; exit $code`
@@ -100,10 +110,26 @@ export function runTask(opts: {
     rows: opts.rows || 24
   })
   e.proc = proc
+  e.tracked = !!opts.track
   wire(opts.id, 'task', e, proc)
+  if (opts.track && mainWC && !mainWC.isDestroyed()) {
+    mainWC.send('task:running', { id: opts.id, running: true })
+  }
   return new Promise((resolve) => {
     proc.onExit(({ exitCode }) => resolve(exitCode))
   })
+}
+
+/** Stop the running task proc (the run server) for a workspace. */
+export function stopTask(id: string): void {
+  const e = entries.get(key(id, 'task'))
+  if (e?.proc) {
+    try {
+      e.proc.kill()
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 export function write(id: string, kind: PtyKind, data: string): void {
