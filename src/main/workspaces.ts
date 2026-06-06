@@ -89,8 +89,9 @@ export async function createWorkspace(name: string, baseBranch?: string): Promis
 }
 
 /**
- * Run the setup script (streaming to the "task" terminal) and then start the
- * Claude session. Runs in the background after createWorkspace returns; calls
+ * Start the Claude session immediately and run the setup script (streaming to
+ * the "task" terminal) in parallel — the Claude window must not wait for setup
+ * to finish. Runs in the background after createWorkspace returns; calls
  * onChange when the status flips to 'active' so the UI can refresh.
  */
 export async function finishSetup(id: string, onChange: () => void): Promise<void> {
@@ -98,22 +99,22 @@ export async function finishSetup(id: string, onChange: () => void): Promise<voi
   const ws = getWorkspace(id)
   if (!ws) return
   const env = buildEnv(ws, settings)
-  try {
-    if (settings.setupScript) {
-      await runTask({
-        id: ws.id,
-        scriptPath: settings.setupScript,
-        label: 'setup',
-        cwd: ws.path,
-        env,
-        cols: 80,
-        rows: 24
-      })
-    }
-  } finally {
-    updateWorkspaceStatus(ws.id, 'active')
-    startClaude({ id: ws.id, cwd: ws.path, env, cols: 80, rows: 24 })
-    onChange()
+  // Flip to active and start Claude right away so the window opens without
+  // blocking on the setup script.
+  updateWorkspaceStatus(ws.id, 'active')
+  startClaude({ id: ws.id, cwd: ws.path, env, cols: 80, rows: 24, args: settings.claudeArgs })
+  onChange()
+  // Run the setup script alongside the now-live Claude session.
+  if (settings.setupScript) {
+    await runTask({
+      id: ws.id,
+      scriptPath: settings.setupScript,
+      label: 'setup',
+      cwd: ws.path,
+      env,
+      cols: 80,
+      rows: 24
+    })
   }
 }
 
@@ -138,7 +139,14 @@ export function restoreSessions(): void {
       updateWorkspaceStatus(ws.id, 'active')
     }
     if (!exists) continue
-    startClaude({ id: ws.id, cwd: ws.path, env: buildEnv(ws, settings), cols: 80, rows: 24 })
+    startClaude({
+      id: ws.id,
+      cwd: ws.path,
+      env: buildEnv(ws, settings),
+      cols: 80,
+      rows: 24,
+      args: settings.claudeArgs
+    })
   }
 }
 

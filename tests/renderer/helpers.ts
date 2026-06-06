@@ -9,7 +9,8 @@ export const settings: Settings = {
   setupScript: '',
   runScript: '',
   archiveScript: '',
-  ideCommand: ''
+  ideCommand: '',
+  claudeArgs: '--dangerously-skip-permissions'
 }
 
 export const mkWs = (over: Partial<Workspace> = {}): Workspace => ({

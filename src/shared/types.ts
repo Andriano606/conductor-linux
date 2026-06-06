@@ -15,6 +15,8 @@ export interface Settings {
   archiveScript: string
   /** Command used to open a workspace in an editor/IDE, e.g. "code", "cursor". */
   ideCommand: string
+  /** Extra CLI arguments passed to the `claude` session, e.g. "--dangerously-skip-permissions". */
+  claudeArgs: string
 }
 
 export type WorkspaceStatus = 'setting_up' | 'active' | 'archiving' | 'archived'

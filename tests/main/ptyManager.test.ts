@@ -89,6 +89,20 @@ describe('startClaude', () => {
       expect.objectContaining({ cwd: '/wt', name: 'xterm-256color' })
     )
   })
+
+  it('appends configured args to the claude command', () => {
+    startClaude({ id: 'w1', ...baseOpts, args: '--dangerously-skip-permissions' })
+    expect(ptyState.spawn).toHaveBeenCalledWith(
+      '/bin/bash',
+      ['-lc', 'exec claude --dangerously-skip-permissions'],
+      expect.anything()
+    )
+  })
+
+  it('ignores blank/whitespace-only args', () => {
+    startClaude({ id: 'w1', ...baseOpts, args: '   ' })
+    expect(ptyState.spawn).toHaveBeenCalledWith('/bin/bash', ['-lc', 'exec claude'], expect.anything())
+  })
 })
 
 describe('startShell', () => {

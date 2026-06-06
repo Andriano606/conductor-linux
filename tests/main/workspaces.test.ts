@@ -71,7 +71,8 @@ const settings: Settings = {
   setupScript: '',
   runScript: '',
   archiveScript: '',
-  ideCommand: ''
+  ideCommand: '',
+  claudeArgs: '--dangerously-skip-permissions'
 }
 
 const mkWs = (over: Partial<Workspace>): Workspace => ({
@@ -165,12 +166,47 @@ describe('finishSetup', () => {
     expect(onChange).toHaveBeenCalled()
   })
 
+  it('starts claude immediately, in parallel with (not after) the setup script', async () => {
+    store._set({ ...settings, setupScript: '/setup.sh' }, [mkWs({ id: 'a', status: 'setting_up' })])
+    // Hold the setup script open so it never resolves during the assertions.
+    let resolveTask: (code: number) => void = () => {}
+    ptym.runTask.mockReturnValue(
+      new Promise<number>((res) => {
+        resolveTask = res
+      })
+    )
+    const onChange = vi.fn()
+    const pending = finishSetup('a', onChange)
+    // The window must open without waiting for setup: claude + active + notify
+    // have all happened even though the setup task is still running.
+    expect(ptym.startClaude).toHaveBeenCalled()
+    expect(store.updateWorkspaceStatus).toHaveBeenCalledWith('a', 'active')
+    expect(onChange).toHaveBeenCalled()
+    expect(ptym.runTask).toHaveBeenCalled()
+    // claude was spawned before the setup task was launched.
+    expect(ptym.startClaude.mock.invocationCallOrder[0]).toBeLessThan(
+      ptym.runTask.mock.invocationCallOrder[0]
+    )
+    resolveTask(0)
+    await pending
+  })
+
+  it('passes the configured claude args through to startClaude', async () => {
+    store._set({ ...settings, claudeArgs: '--dangerously-skip-permissions' }, [
+      mkWs({ id: 'a', status: 'setting_up' })
+    ])
+    await finishSetup('a', vi.fn())
+    expect(ptym.startClaude).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'a', args: '--dangerously-skip-permissions' })
+    )
+  })
+
   it('still activates and starts claude even when the setup script fails', async () => {
     store._set({ ...settings, setupScript: '/setup.sh' }, [mkWs({ id: 'a', status: 'setting_up' })])
     ptym.runTask.mockRejectedValue(new Error('boom'))
     const onChange = vi.fn()
-    // The finally block runs (activate + start + notify), then the rejection
-    // still propagates — finishSetup is awaited as a fire-and-forget in ipc.ts.
+    // claude/active/notify happen before the setup task is awaited, so the
+    // rejection still propagates afterwards — finishSetup is fire-and-forget in ipc.ts.
     await expect(finishSetup('a', onChange)).rejects.toThrow('boom')
     expect(store.updateWorkspaceStatus).toHaveBeenCalledWith('a', 'active')
     expect(ptym.startClaude).toHaveBeenCalled()
@@ -213,6 +249,17 @@ describe('restoreSessions healing matrix', () => {
 
     const started = ptym.startClaude.mock.calls.map((c) => c[0].id)
     expect(started.sort()).toEqual(['active-live', 'arch-live', 'setup-live'])
+  })
+
+  it('restarts claude with the configured args', () => {
+    store._set({ ...settings, claudeArgs: '--dangerously-skip-permissions' }, [
+      mkWs({ id: 'a', status: 'active', path: '/wt/a' })
+    ])
+    fsm.existsSync.mockReturnValue(true)
+    restoreSessions()
+    expect(ptym.startClaude).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'a', args: '--dangerously-skip-permissions' })
+    )
   })
 })
 

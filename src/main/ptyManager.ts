@@ -81,10 +81,12 @@ export function startClaude(opts: {
   env: NodeJS.ProcessEnv
   cols: number
   rows: number
+  args?: string
 }): void {
   const e = ensure(opts.id, 'claude')
   if (e.proc) return
-  const proc = pty.spawn('/bin/bash', ['-lc', 'exec claude'], {
+  const args = opts.args?.trim()
+  const proc = pty.spawn('/bin/bash', ['-lc', args ? `exec claude ${args}` : 'exec claude'], {
     name: 'xterm-256color',
     cwd: opts.cwd,
     env: opts.env,

@@ -9,6 +9,7 @@ type PathField =
   | 'runScript'
   | 'archiveScript'
   | 'ideCommand'
+  | 'claudeArgs'
 
 export function SettingsModal(): JSX.Element {
   const { settings, saveSettings, openSettings } = useStore()
@@ -20,7 +21,8 @@ export function SettingsModal(): JSX.Element {
       setupScript: '',
       runScript: '',
       archiveScript: '',
-      ideCommand: ''
+      ideCommand: '',
+      claudeArgs: '--dangerously-skip-permissions'
     }
   )
   const [repoValid, setRepoValid] = useState<boolean | null>(null)
@@ -148,6 +150,20 @@ export function SettingsModal(): JSX.Element {
           <div className="hint">
             Воркспейси отримують порти починаючи з цього значення (передається скриптам як
             $CONDUCTOR_PORT).
+          </div>
+        </div>
+        <div className="field">
+          <label>Аргументи claude</label>
+          <div className="row">
+            <input
+              spellCheck={false}
+              placeholder="--dangerously-skip-permissions"
+              value={form.claudeArgs}
+              onChange={(e) => set('claudeArgs', e.target.value)}
+            />
+          </div>
+          <div className="hint">
+            Додаткові аргументи командного рядка, з якими запускається сесія claude.
           </div>
         </div>
         <div className="modal-actions">

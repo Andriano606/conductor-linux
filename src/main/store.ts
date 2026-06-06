@@ -20,7 +20,8 @@ function defaults(): PersistedData {
       setupScript: '',
       runScript: '',
       archiveScript: '',
-      ideCommand: ''
+      ideCommand: '',
+      claudeArgs: '--dangerously-skip-permissions'
     },
     workspaces: []
   }

@@ -333,10 +333,29 @@ button {
 }
 .branch-list {
   margin-top: 6px;
-  max-height: 220px;
+  height: 220px;
   overflow-y: auto;
   border: 1px solid var(--bg-3);
   border-radius: 8px;
+}
+.branch-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+.spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--bg-3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .branch-item {
   padding: 7px 10px;

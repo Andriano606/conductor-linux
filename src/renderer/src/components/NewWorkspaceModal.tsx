@@ -70,6 +70,7 @@ export function NewWorkspaceModal(): JSX.Element {
           <label>Назва / гілка</label>
           <input
             autoFocus
+            spellCheck={false}
             value={name}
             disabled={busy}
             placeholder="напр. feature/login"
@@ -89,6 +90,7 @@ export function NewWorkspaceModal(): JSX.Element {
         <div className="field">
           <label>Базова гілка{base ? <span className="branch-current"> · {base}</span> : null}</label>
           <input
+            spellCheck={false}
             placeholder="Пошук гілки…"
             value={search}
             disabled={busy || loadingBranches}
@@ -102,7 +104,9 @@ export function NewWorkspaceModal(): JSX.Element {
           />
           <div className="branch-list">
             {loadingBranches ? (
-              <div className="branch-empty">Завантаження гілок…</div>
+              <div className="branch-loading">
+                <div className="spinner" />
+              </div>
             ) : branchError ? (
               <div className="branch-empty err">{branchError}</div>
             ) : filtered.length === 0 ? (

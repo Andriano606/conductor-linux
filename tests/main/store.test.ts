@@ -54,6 +54,7 @@ describe('initStore', () => {
     expect(s.repoPath).toBe('')
     expect(s.startPort).toBe(3002)
     expect(s.worktreesDir).toBe(join(tmp, '.conductor-linux', 'worktrees'))
+    expect(s.claudeArgs).toBe('--dangerously-skip-permissions')
     expect(getWorkspaces()).toEqual([])
   })
 
@@ -72,6 +73,7 @@ describe('initStore', () => {
     // Missing keys are backfilled from defaults.
     expect(s.setupScript).toBe('')
     expect(s.ideCommand).toBe('')
+    expect(s.claudeArgs).toBe('--dangerously-skip-permissions')
     expect(getWorkspaces()).toHaveLength(1)
   })
 
@@ -100,7 +102,8 @@ describe('settings persistence', () => {
       setupScript: '/s.sh',
       runScript: '/r.sh',
       archiveScript: '/a.sh',
-      ideCommand: 'code'
+      ideCommand: 'code',
+      claudeArgs: '--dangerously-skip-permissions'
     }
     setSettings(next)
     expect(getSettings()).toEqual(next)
