@@ -1,13 +1,19 @@
 import { create } from 'zustand'
-import type { PtyKind, Settings, Workspace } from '@shared/types'
+import type { Project, PtyKind, Settings, Workspace } from '@shared/types'
 
 interface AppState {
   settings: Settings | null
+  projects: Project[]
   workspaces: Workspace[]
   activeId: string | null
   activeKind: PtyKind
   showSettings: boolean
-  showNew: boolean
+  /** Project id whose New-workspace modal is open (null = closed). */
+  newWorkspaceProjectId: string | null
+  /** Whether the New-project modal is open. */
+  showNewProject: boolean
+  /** Project id whose settings modal is open (null = closed). */
+  projectSettingsId: string | null
   showArchived: boolean
   busy: boolean
   error: string | null
@@ -24,10 +30,15 @@ interface AppState {
   setActive: (id: string) => void
   setKind: (kind: PtyKind) => void
   openSettings: (open: boolean) => void
-  openNew: (open: boolean) => void
+  openNewProject: (open: boolean) => void
+  openNewWorkspace: (projectId: string | null) => void
+  openProjectSettings: (id: string | null) => void
   openArchived: (open: boolean) => void
   saveSettings: (s: Settings) => Promise<void>
-  createWorkspace: (name: string, baseBranch?: string) => Promise<void>
+  createProject: (repoPath: string) => Promise<void>
+  saveProject: (project: Project) => Promise<void>
+  deleteProject: (id: string) => Promise<void>
+  createWorkspace: (projectId: string, name: string, baseBranch?: string) => Promise<void>
   runActive: () => Promise<void>
   stopActive: () => Promise<void>
   openActiveInBrowser: () => void
@@ -36,17 +47,21 @@ interface AppState {
   restoreWorkspace: (id: string) => Promise<void>
   deleteWorkspace: (id: string) => Promise<void>
   setRunning: (id: string, running: boolean) => void
+  setProjects: (projects: Project[]) => void
   setWorkspaces: (ws: Workspace[]) => void
   clearError: () => void
 }
 
 export const useStore = create<AppState>((set, get) => ({
   settings: null,
+  projects: [],
   workspaces: [],
   activeId: null,
   activeKind: 'claude',
   showSettings: false,
-  showNew: false,
+  newWorkspaceProjectId: null,
+  showNewProject: false,
+  projectSettingsId: null,
   showArchived: false,
   busy: false,
   error: null,
@@ -55,15 +70,14 @@ export const useStore = create<AppState>((set, get) => ({
   confirmRequest: null,
 
   load: async () => {
-    const [settings, workspaces] = await Promise.all([
+    const [settings, projects, workspaces] = await Promise.all([
       window.api.getSettings(),
+      window.api.listProjects(),
       window.api.listWorkspaces()
     ])
-    set({ settings, workspaces })
+    set({ settings, projects, workspaces })
     const live = workspaces.filter((w) => w.status !== 'archived')
     if (!get().activeId && live.length > 0) set({ activeId: live[0].id })
-    // Force settings open on first run when nothing is configured.
-    if (!settings.repoPath) set({ showSettings: true })
   },
 
   // Restore the tab this workspace was last on (default Claude).
@@ -75,8 +89,16 @@ export const useStore = create<AppState>((set, get) => ({
       kindById: s.activeId ? { ...s.kindById, [s.activeId]: kind } : s.kindById
     })),
   openSettings: (open) => set({ showSettings: open }),
+  openNewProject: (open) =>
+    set(open ? { showNewProject: true, busy: false, error: null } : { showNewProject: false }),
   // Reset any stale busy/error so the New-workspace modal always opens unblocked.
-  openNew: (open) => set(open ? { showNew: true, busy: false, error: null } : { showNew: false }),
+  openNewWorkspace: (projectId) =>
+    set(
+      projectId
+        ? { newWorkspaceProjectId: projectId, busy: false, error: null }
+        : { newWorkspaceProjectId: null }
+    ),
+  openProjectSettings: (id) => set({ projectSettingsId: id, error: null }),
   openArchived: (open) => set({ showArchived: open }),
 
   saveSettings: async (s) => {
@@ -84,13 +106,46 @@ export const useStore = create<AppState>((set, get) => ({
     set({ settings: saved, showSettings: false })
   },
 
-  createWorkspace: async (name, baseBranch) => {
+  createProject: async (repoPath) => {
     set({ busy: true, error: null })
     try {
-      const ws = await window.api.createWorkspace(name, baseBranch)
+      // The project name is derived from the repo folder name on the main side.
+      await window.api.createProject(repoPath)
+      set({ showNewProject: false })
+    } catch (e) {
+      set({ error: (e as Error).message })
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  saveProject: async (project) => {
+    set({ error: null })
+    try {
+      await window.api.updateProject(project)
+      set({ projectSettingsId: null })
+    } catch (e) {
+      set({ error: (e as Error).message })
+    }
+  },
+
+  deleteProject: async (id) => {
+    set({ error: null })
+    try {
+      await window.api.deleteProject(id)
+      set({ projectSettingsId: null })
+    } catch (e) {
+      set({ error: (e as Error).message })
+    }
+  },
+
+  createWorkspace: async (projectId, name, baseBranch) => {
+    set({ busy: true, error: null })
+    try {
+      const ws = await window.api.createWorkspace(projectId, name, baseBranch)
       // Show the "Скрипти" tab so the user can watch setup stream in the background.
       set((s) => ({
-        showNew: false,
+        newWorkspaceProjectId: null,
         activeId: ws.id,
         activeKind: 'task',
         kindById: { ...s.kindById, [ws.id]: 'task' }
@@ -188,6 +243,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({ confirmRequest: null })
   },
 
+  setProjects: (projects) => set({ projects }),
   setWorkspaces: (ws) => set({ workspaces: ws }),
   clearError: () => set({ error: null })
 }))

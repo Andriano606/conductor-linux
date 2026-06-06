@@ -2,137 +2,52 @@ import { useEffect, useState } from 'react'
 import type { Settings } from '@shared/types'
 import { useStore } from '../store'
 
-type PathField =
-  | 'repoPath'
-  | 'worktreesDir'
-  | 'setupScript'
-  | 'runScript'
-  | 'archiveScript'
-  | 'ideCommand'
-  | 'claudeArgs'
-
 export function SettingsModal(): JSX.Element {
   const { settings, saveSettings, openSettings } = useStore()
   const [form, setForm] = useState<Settings>(
     settings ?? {
-      repoPath: '',
       worktreesDir: '',
       startPort: 3002,
-      setupScript: '',
-      runScript: '',
-      archiveScript: '',
       ideCommand: '',
       claudeArgs: '--dangerously-skip-permissions'
     }
   )
-  const [repoValid, setRepoValid] = useState<boolean | null>(null)
 
   useEffect(() => {
     if (settings) setForm(settings)
   }, [settings])
 
-  useEffect(() => {
-    let cancelled = false
-    if (!form.repoPath) {
-      setRepoValid(null)
-      return
-    }
-    window.api.isGitRepo(form.repoPath).then((ok) => {
-      if (!cancelled) setRepoValid(ok)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [form.repoPath])
+  const set = (key: keyof Settings, value: string): void => setForm((f) => ({ ...f, [key]: value }))
 
-  const set = (key: PathField, value: string): void => setForm((f) => ({ ...f, [key]: value }))
-
-  const browse = async (key: PathField, dir: boolean): Promise<void> => {
-    const picked = dir ? await window.api.pickDir() : await window.api.pickFile()
-    if (picked) set(key, picked)
+  const browseDir = async (): Promise<void> => {
+    const picked = await window.api.pickDir()
+    if (picked) set('worktreesDir', picked)
   }
 
-  const canSave =
-    !!form.repoPath &&
-    !!form.worktreesDir &&
-    repoValid !== false &&
-    form.startPort >= 1024 &&
-    form.startPort <= 65535
-
-  const fields: {
-    key: PathField
-    label: string
-    dir: boolean
-    hint: string
-    placeholder?: string
-  }[] = [
-    {
-      key: 'repoPath',
-      label: 'Репозиторій (git)',
-      dir: true,
-      hint: 'Головний git-репозиторій, з якого створюються worktree.'
-    },
-    {
-      key: 'worktreesDir',
-      label: 'Директорія для worktree',
-      dir: true,
-      hint: 'Де зберігати ізольовані копії воркспейсів.'
-    },
-    {
-      key: 'setupScript',
-      label: 'Setup-скрипт',
-      dir: false,
-      hint: 'Виконується автоматично при створенні воркспейсу.'
-    },
-    {
-      key: 'runScript',
-      label: 'Run-скрипт',
-      dir: false,
-      hint: 'Виконується кнопкою Run. Доступний $CONDUCTOR_PORT.'
-    },
-    {
-      key: 'archiveScript',
-      label: 'Archive-скрипт',
-      dir: false,
-      hint: 'Виконується перед архівацією воркспейсу.'
-    },
-    {
-      key: 'ideCommand',
-      label: 'IDE',
-      dir: false,
-      placeholder: 'code',
-      hint: 'Команда для відкриття воркспейсу, напр. code, cursor, subl, webstorm. Шлях до воркспейсу передається аргументом.'
-    }
-  ]
+  const canSave = !!form.worktreesDir && form.startPort >= 1024 && form.startPort <= 65535
 
   return (
-    <div className="modal-backdrop" onClick={() => settings?.repoPath && openSettings(false)}>
+    <div className="modal-backdrop" onClick={() => openSettings(false)}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Налаштування</h2>
-        {fields.map((f) => (
-          <div className="field" key={f.key}>
-            <label>{f.label}</label>
-            <div className="row">
-              <input
-                value={form[f.key]}
-                placeholder={f.placeholder ?? (f.dir ? '/шлях/до/директорії' : '/шлях/до/скрипта.sh')}
-                onChange={(e) => set(f.key, e.target.value)}
-              />
-              <button className="btn" onClick={() => void browse(f.key, f.dir)}>
-                Огляд…
-              </button>
-            </div>
-            <div className="hint">
-              {f.hint}
-              {f.key === 'repoPath' && repoValid === false && (
-                <span className="err"> — це не git-репозиторій.</span>
-              )}
-              {f.key === 'repoPath' && repoValid === true && (
-                <span className="ok"> — git-репозиторій знайдено.</span>
-              )}
-            </div>
+        <h2>Глобальні налаштування</h2>
+
+        <div className="field">
+          <label>Директорія для worktree</label>
+          <div className="row">
+            <input
+              value={form.worktreesDir}
+              placeholder="/шлях/до/директорії"
+              onChange={(e) => set('worktreesDir', e.target.value)}
+            />
+            <button className="btn" onClick={() => void browseDir()}>
+              Огляд…
+            </button>
           </div>
-        ))}
+          <div className="hint">
+            Базова тека, де зберігаються ізольовані worktree. Кожен проект отримує власну підпапку.
+          </div>
+        </div>
+
         <div className="field">
           <label>Початковий порт</label>
           <div className="row">
@@ -152,6 +67,23 @@ export function SettingsModal(): JSX.Element {
             $CONDUCTOR_PORT).
           </div>
         </div>
+
+        <div className="field">
+          <label>IDE</label>
+          <div className="row">
+            <input
+              spellCheck={false}
+              placeholder="code"
+              value={form.ideCommand}
+              onChange={(e) => set('ideCommand', e.target.value)}
+            />
+          </div>
+          <div className="hint">
+            Команда для відкриття воркспейсу, напр. code, cursor, subl, webstorm. Шлях до воркспейсу
+            передається аргументом.
+          </div>
+        </div>
+
         <div className="field">
           <label>Аргументи claude</label>
           <div className="row">
@@ -166,12 +98,11 @@ export function SettingsModal(): JSX.Element {
             Додаткові аргументи командного рядка, з якими запускається сесія claude.
           </div>
         </div>
+
         <div className="modal-actions">
-          {settings?.repoPath && (
-            <button className="btn" onClick={() => openSettings(false)}>
-              Скасувати
-            </button>
-          )}
+          <button className="btn" onClick={() => openSettings(false)}>
+            Скасувати
+          </button>
           <button className="btn primary" disabled={!canSave} onClick={() => void saveSettings(form)}>
             Зберегти
           </button>

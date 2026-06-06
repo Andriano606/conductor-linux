@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Linux desktop app (Electron + React + TypeScript) that runs **parallel Claude Code sessions**, each isolated in its own **git worktree** — a Linux clone of conductor.build. Each "workspace" is a separate checkout of a target repo on its own branch, with its own interactive `claude` session, its own port, and its own setup/run/archive scripts.
+A Linux desktop app (Electron + React + TypeScript) that runs **parallel Claude Code sessions**, each isolated in its own **git worktree** — a Linux clone of conductor.build. You register one or more **projects** (each a target git repo with its own setup/run/archive scripts); within a project you create **workspaces** — a separate checkout of that repo on its own branch, with its own interactive `claude` session and its own port. Worktrees live under `worktreesDir/<project-slug>/<workspace-slug>`.
 
 Prerequisites at runtime: Node 20+, `git`, and the `claude` CLI on `PATH` (auth is inherited from the already-logged-in CLI). Note: much of the UI and inline strings are in Ukrainian.
 
@@ -18,7 +18,11 @@ npm run dist         # build then package AppImage + deb (electron-builder, Linu
 npm run rebuild      # manually rebuild node-pty if you hit native-module ABI errors
 ```
 
-There is **no test suite, linter, or formatter configured** — `npm run build` (which runs `tsc` via electron-vite) is the only correctness gate.
+```bash
+npm test             # run the Vitest suite (main + renderer)
+```
+
+Correctness gates: `npm run build` (runs `tsc` via electron-vite) for types, and `npm test` (Vitest) for behaviour. No linter or formatter is configured.
 
 ## Architecture
 
@@ -43,18 +47,22 @@ The three kinds: `claude` (interactive `claude` session), `shell` (free interact
 
 `src/main/workspaces.ts` orchestrates everything; `src/main/git.ts` is the only place that shells out to `git`. Status state machine (`WorkspaceStatus`): `setting_up → active → archiving → archived`.
 
-- **Create**: `createWorkspace` adds the worktree+branch synchronously and returns immediately with `setting_up`; `finishSetup` then runs the setup script and starts `claude` **in the background** so the UI never blocks. IPC handlers in `ipc.ts` follow this pattern (`void finishSetup(...)`, `notifyWorkspacesChanged()`).
+- **Create**: `createWorkspace(projectId, name, baseBranch?)` adds the worktree+branch synchronously under the workspace's **project** (see Projects below) and returns immediately with `setting_up`; `finishSetup` then runs the project's setup script and starts `claude` **in the background** so the UI never blocks. IPC handlers in `ipc.ts` follow this pattern (`void finishSetup(...)`, `notifyWorkspacesChanged()`).
 - **Archive**: `beginArchive` (stops run, flips to `archiving`) then background `finishArchive` (archive script → kill PTYs → `git worktree remove --force`). The git **branch is kept** so the workspace can be restored.
 - **Restore/Delete**: `restoreWorktree` re-adds the worktree on the existing branch (prunes stale refs first); `deleteArchivedWorkspace` removes worktree + deletes the branch permanently.
 - **Self-healing on launch** (`restoreSessions`): a workspace left in a transient state by an interrupted run (`archiving`/`setting_up`) is reconciled to `active` or `archived` based on whether its worktree dir still exists, then `claude` is restarted for every live workspace (PTYs are memory-only and die on quit).
 
+### Projects
+
+A **project** (`Project` in `src/shared/types.ts`) is a registered git repository that workspaces are worktrees of. Each project carries its own `repoPath` and the three scripts (`setupScript`/`runScript`/`archiveScript`), so different repos can have different setup/run/archive behaviour. The sidebar lists projects as groups; each has a `+` (new workspace in that project) and `⚙` (per-project settings, incl. delete). `createProject(repoPath, name?)` validates the path is a git repo; `deleteProject` tears down every workspace under it (kill PTYs → remove worktrees → delete branches) then drops the project. Workspaces carry a `projectId`; every main-side operation resolves the workspace's project via `getProject(ws.projectId)` to find the repo path and scripts.
+
 ### State & settings persistence
 
-`src/main/store.ts` is an in-memory object persisted to `app.getPath('userData')/conductor-data.json` on every mutation. It holds `Settings` (repo path, worktrees dir, startPort, the three script paths, IDE command) and the `Workspace[]`. `nextPort()` hands out the lowest free port from `startPort`, exposed to scripts as `CONDUCTOR_PORT`.
+`src/main/store.ts` is an in-memory object persisted to `app.getPath('userData')/conductor-data.json` on every mutation. It holds the **global** `Settings` (worktrees dir, startPort, IDE command, claude args), the `Project[]`, and the `Workspace[]`. Per-repo concerns (repo path + the three scripts) live on `Project`, **not** `Settings`. `initStore()` runs a one-shot **migration**: a legacy data file whose global settings still hold `repoPath`/scripts (and whose workspaces lack `projectId`) is folded into a single synthesized project, and every orphan workspace is stamped with its id. `nextPort()` hands out the lowest free port from `startPort` (unique across all projects), exposed to scripts as `CONDUCTOR_PORT`.
 
 ### Scripts environment
 
-`src/main/env.ts` builds the env for every spawned shell/script. It injects the conductor-compatible `CONDUCTOR_*` vars (`CONDUCTOR_WORKSPACE_PATH`, `CONDUCTOR_ROOT_PATH`, `CONDUCTOR_WORKSPACE_NAME`, `CONDUCTOR_PORT`) and **deletes AppImage-runtime leak vars** (`ARGV0`, `APPIMAGE`, `APPDIR`, `OWD`). The `ARGV0` deletion is load-bearing: uutils-coreutils multicall binaries read it and abort `mkdir`/`tail`/etc. with "Security violation". `scripts/` holds example `setup.sh`/`run.sh`/`archive.sh` — the app hardcodes no project specifics; the user's scripts do per-workspace work (DB, deps) via the `CONDUCTOR_*` vars.
+`src/main/env.ts` `buildEnv(ws, project)` builds the env for every spawned shell/script. It injects the conductor-compatible `CONDUCTOR_*` vars (`CONDUCTOR_WORKSPACE_PATH`, `CONDUCTOR_ROOT_PATH` = the project's repo path, `CONDUCTOR_WORKSPACE_NAME`, `CONDUCTOR_PORT`) and **deletes AppImage-runtime leak vars** (`ARGV0`, `APPIMAGE`, `APPDIR`, `OWD`). The `ARGV0` deletion is load-bearing: uutils-coreutils multicall binaries read it and abort `mkdir`/`tail`/etc. with "Security violation". `scripts/` holds example `setup.sh`/`run.sh`/`archive.sh` — the app hardcodes no project specifics; each project's scripts do per-workspace work (DB, deps) via the `CONDUCTOR_*` vars.
 
 ## Linux-specific gotchas (don't regress these)
 

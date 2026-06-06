@@ -3,31 +3,50 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { NewWorkspaceModal } from '../../../src/renderer/src/components/NewWorkspaceModal'
 import { useStore } from '../../../src/renderer/src/store'
-import { Api, mkWs, setupRenderer } from '../helpers'
+import { Api, mkProject, mkWs, setupRenderer } from '../helpers'
 
 let api: Api
 beforeEach(() => {
   api = setupRenderer()
   api.listBranches.mockResolvedValue({ branches: ['main', 'dev'], defaultBranch: 'main' })
+  // The modal is always opened in the context of a project.
+  useStore.setState({ projects: [mkProject({ id: 'p1', name: 'proj' })], newWorkspaceProjectId: 'p1' })
 })
 
 const nameInput = (): HTMLElement => screen.getByPlaceholderText('напр. feature/login')
 const searchInput = (): HTMLElement => screen.getByPlaceholderText('Пошук гілки…')
 
 describe('NewWorkspaceModal', () => {
-  it('loads branches on mount and preselects the default', async () => {
+  it('loads the project branches on mount and preselects the default', async () => {
     render(<NewWorkspaceModal />)
     await waitFor(() => expect(screen.getByText('dev')).toBeInTheDocument())
+    expect(api.listBranches).toHaveBeenCalledWith('p1')
     expect(screen.getByText('main')).toBeInTheDocument()
   })
 
-  it('flags a duplicate name and disables submit', async () => {
-    useStore.setState({ workspaces: [mkWs({ id: 'a', name: 'dup', branch: 'dup' })] })
+  it('flags a duplicate name within the project and disables submit', async () => {
+    useStore.setState({
+      projects: [mkProject({ id: 'p1' })],
+      newWorkspaceProjectId: 'p1',
+      workspaces: [mkWs({ id: 'a', projectId: 'p1', name: 'dup', branch: 'dup' })]
+    })
     render(<NewWorkspaceModal />)
     await waitFor(() => expect(screen.getByText('dev')).toBeInTheDocument())
     fireEvent.change(nameInput(), { target: { value: 'dup' } })
     expect(screen.getByText(/вже існує/)).toBeInTheDocument()
     expect(screen.getByText('Створити')).toBeDisabled()
+  })
+
+  it('does not flag a name used only in another project', async () => {
+    useStore.setState({
+      projects: [mkProject({ id: 'p1' })],
+      newWorkspaceProjectId: 'p1',
+      workspaces: [mkWs({ id: 'a', projectId: 'p2', name: 'dup', branch: 'dup' })]
+    })
+    render(<NewWorkspaceModal />)
+    await waitFor(() => expect(screen.getByText('dev')).toBeInTheDocument())
+    fireEvent.change(nameInput(), { target: { value: 'dup' } })
+    expect(screen.queryByText(/вже існує/)).not.toBeInTheDocument()
   })
 
   it('filters the branch list case-insensitively', async () => {
@@ -48,11 +67,11 @@ describe('NewWorkspaceModal', () => {
     expect(screen.getByText(/Базова гілка/).textContent).toContain('dev')
   })
 
-  it('submits the trimmed name and selected base', async () => {
+  it('submits the project id, trimmed name and selected base', async () => {
     render(<NewWorkspaceModal />)
     await waitFor(() => expect(screen.getByText('dev')).toBeInTheDocument())
     fireEvent.change(nameInput(), { target: { value: '  newone  ' } })
     fireEvent.click(screen.getByText('Створити'))
-    expect(api.createWorkspace).toHaveBeenCalledWith('newone', 'main')
+    expect(api.createWorkspace).toHaveBeenCalledWith('p1', 'newone', 'main')
   })
 })

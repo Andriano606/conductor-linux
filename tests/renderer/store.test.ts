@@ -1,16 +1,19 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import type { Workspace } from '../../src/shared/types'
 import { useStore } from '../../src/renderer/src/store'
-import { makeApi, mkWs, settings as baseSettings } from './helpers'
+import { makeApi, mkProject, mkWs, settings as baseSettings } from './helpers'
 
 const initial = {
   settings: null,
+  projects: [],
   workspaces: [],
   activeId: null,
   activeKind: 'claude' as const,
   showSettings: false,
-  showNew: false,
+  newWorkspaceProjectId: null,
+  showNewProject: false,
+  projectSettingsId: null,
   showArchived: false,
   busy: false,
   error: null,
@@ -35,19 +38,21 @@ describe('load', () => {
       mkWs({ id: 'arch', status: 'archived' }),
       mkWs({ id: 'live', status: 'active' })
     ]
-    api.getSettings.mockResolvedValue({ ...baseSettings, repoPath: '/repo' })
+    api.getSettings.mockResolvedValue(baseSettings)
+    api.listProjects.mockResolvedValue([mkProject()])
     api.listWorkspaces.mockResolvedValue(ws)
     await get().load()
+    expect(get().projects).toHaveLength(1)
     expect(get().workspaces).toHaveLength(2)
     expect(get().activeId).toBe('live')
     expect(get().showSettings).toBe(false)
   })
 
-  it('forces settings open when repoPath is empty', async () => {
-    api.getSettings.mockResolvedValue({ ...baseSettings, repoPath: '' })
+  it('selects nothing and opens no modal when there are no workspaces', async () => {
+    api.listProjects.mockResolvedValue([])
     api.listWorkspaces.mockResolvedValue([])
     await get().load()
-    expect(get().showSettings).toBe(true)
+    expect(get().showSettings).toBe(false)
     expect(get().activeId).toBeNull()
   })
 })
@@ -91,25 +96,66 @@ describe('setActive / setKind', () => {
   })
 })
 
-describe('openNew', () => {
-  it('clears stale busy/error when opening', () => {
+describe('openNewProject / openNewWorkspace', () => {
+  it('opening New-project clears stale busy/error', () => {
     useStore.setState({ busy: true, error: 'old' })
-    get().openNew(true)
-    expect(get()).toMatchObject({ showNew: true, busy: false, error: null })
+    get().openNewProject(true)
+    expect(get()).toMatchObject({ showNewProject: true, busy: false, error: null })
+    get().openNewProject(false)
+    expect(get().showNewProject).toBe(false)
   })
-  it('closes without touching busy/error', () => {
-    get().openNew(false)
-    expect(get().showNew).toBe(false)
+
+  it('opening New-workspace records the project id and clears busy/error', () => {
+    useStore.setState({ busy: true, error: 'old' })
+    get().openNewWorkspace('p1')
+    expect(get()).toMatchObject({ newWorkspaceProjectId: 'p1', busy: false, error: null })
+    get().openNewWorkspace(null)
+    expect(get().newWorkspaceProjectId).toBeNull()
+  })
+})
+
+describe('createProject', () => {
+  it('closes the modal on success', async () => {
+    await get().createProject('/repo')
+    expect(api.createProject).toHaveBeenCalledWith('/repo')
+    expect(get()).toMatchObject({ showNewProject: false, busy: false })
+  })
+  it('surfaces the error and clears busy on failure', async () => {
+    api.createProject.mockRejectedValue(new Error('not a git repo'))
+    await get().createProject('/repo')
+    expect(get().error).toBe('not a git repo')
+    expect(get().busy).toBe(false)
+  })
+})
+
+describe('saveProject / deleteProject', () => {
+  it('saveProject calls the api and closes the project settings modal', async () => {
+    useStore.setState({ projectSettingsId: 'p1' })
+    const p = mkProject({ id: 'p1', name: 'renamed' })
+    await get().saveProject(p)
+    expect(api.updateProject).toHaveBeenCalledWith(p)
+    expect(get().projectSettingsId).toBeNull()
+  })
+  it('deleteProject calls the api and closes the modal', async () => {
+    useStore.setState({ projectSettingsId: 'p1' })
+    await get().deleteProject('p1')
+    expect(api.deleteProject).toHaveBeenCalledWith('p1')
+    expect(get().projectSettingsId).toBeNull()
+  })
+  it('deleteProject sets error on failure', async () => {
+    api.deleteProject.mockRejectedValue(new Error('busy'))
+    await get().deleteProject('p1')
+    expect(get().error).toBe('busy')
   })
 })
 
 describe('createWorkspace', () => {
   it('switches to the task tab and activates the new workspace on success', async () => {
     api.createWorkspace.mockResolvedValue(mkWs({ id: 'new' }))
-    await get().createWorkspace('feat', 'main')
-    expect(api.createWorkspace).toHaveBeenCalledWith('feat', 'main')
+    await get().createWorkspace('p1', 'feat', 'main')
+    expect(api.createWorkspace).toHaveBeenCalledWith('p1', 'feat', 'main')
     expect(get()).toMatchObject({
-      showNew: false,
+      newWorkspaceProjectId: null,
       activeId: 'new',
       activeKind: 'task',
       busy: false
@@ -119,7 +165,7 @@ describe('createWorkspace', () => {
 
   it('surfaces the error and clears busy on failure', async () => {
     api.createWorkspace.mockRejectedValue(new Error('branch exists'))
-    await get().createWorkspace('feat')
+    await get().createWorkspace('p1', 'feat')
     expect(get().error).toBe('branch exists')
     expect(get().busy).toBe(false)
   })
@@ -202,9 +248,11 @@ describe('deleteWorkspace', () => {
 })
 
 describe('plain setters', () => {
-  it('setRunning / setWorkspaces / clearError', () => {
+  it('setRunning / setProjects / setWorkspaces / clearError', () => {
     get().setRunning('a', true)
     expect(get().runningById.a).toBe(true)
+    get().setProjects([mkProject({ id: 'px' })])
+    expect(get().projects).toHaveLength(1)
     const ws: Workspace[] = [mkWs({ id: 'x' })]
     get().setWorkspaces(ws)
     expect(get().workspaces).toEqual(ws)

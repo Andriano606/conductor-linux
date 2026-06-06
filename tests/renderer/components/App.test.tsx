@@ -24,14 +24,14 @@ beforeEach(() => {
 
 describe('App', () => {
   it('shows the placeholder when no workspace is active', async () => {
-    api.getSettings.mockResolvedValue({ ...settings, repoPath: '/repo' })
+    api.getSettings.mockResolvedValue(settings)
     api.listWorkspaces.mockResolvedValue([])
     render(<App />)
-    await waitFor(() => expect(screen.getByText(/Створи воркспейс/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Додай проект/)).toBeInTheDocument())
   })
 
   it('renders the toolbar and terminal host for the active workspace', async () => {
-    api.getSettings.mockResolvedValue({ ...settings, repoPath: '/repo' })
+    api.getSettings.mockResolvedValue(settings)
     api.listWorkspaces.mockResolvedValue([mkWs({ id: 'a', name: 'alpha' })])
     const { container } = render(<App />)
     // The toolbar's Run button only renders once a workspace is active.
@@ -45,7 +45,7 @@ describe('App', () => {
       changed = cb
       return () => {}
     })
-    api.getSettings.mockResolvedValue({ ...settings, repoPath: '/repo' })
+    api.getSettings.mockResolvedValue(settings)
     api.listWorkspaces.mockResolvedValue([
       mkWs({ id: 'a', name: 'alpha' }),
       mkWs({ id: 'b', name: 'beta' })

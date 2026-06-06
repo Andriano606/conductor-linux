@@ -1,28 +1,46 @@
 // Types shared between the main, preload and renderer processes.
 
+/**
+ * Global, machine-wide settings shared by every project. Project-specific
+ * settings (the repo path and setup/run/archive scripts) live on Project.
+ */
 export interface Settings {
-  /** Path to the main git repository that worktrees are created from. */
-  repoPath: string
-  /** Directory where workspace worktrees are created. */
+  /** Base directory under which each project's worktrees are created (in a per-project subfolder). */
   worktreesDir: string
   /** Lowest port assigned to a workspace (exposed to scripts as CONDUCTOR_PORT). */
   startPort: number
-  /** Absolute path to the setup script (runs on workspace creation). */
-  setupScript: string
-  /** Absolute path to the run script (runs on demand via the Run button). */
-  runScript: string
-  /** Absolute path to the archive script (runs before a workspace is archived). */
-  archiveScript: string
   /** Command used to open a workspace in an editor/IDE, e.g. "code", "cursor". */
   ideCommand: string
   /** Extra CLI arguments passed to the `claude` session, e.g. "--dangerously-skip-permissions". */
   claudeArgs: string
 }
 
+/**
+ * A target git repository. Workspaces are git worktrees of a project's repo.
+ * Each project carries its own scripts so different repos can have different
+ * setup/run/archive behaviour.
+ */
+export interface Project {
+  id: string
+  /** Display name (defaults to the repo folder name; editable). */
+  name: string
+  /** Path to the main git repository that worktrees are created from. */
+  repoPath: string
+  /** Absolute path to the setup script (runs on workspace creation). */
+  setupScript: string
+  /** Absolute path to the run script (runs on demand via the Run button). */
+  runScript: string
+  /** Absolute path to the archive script (runs before a workspace is archived). */
+  archiveScript: string
+  createdAt: number
+}
+
 export type WorkspaceStatus = 'setting_up' | 'active' | 'archiving' | 'archived'
 
 export interface Workspace {
   id: string
+  /** The project (repository) this workspace belongs to. */
+  projectId: string
   name: string
   /** git branch created for this workspace, e.g. conductor/<name>. */
   branch: string

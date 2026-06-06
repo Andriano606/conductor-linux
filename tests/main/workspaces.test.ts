@@ -1,17 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Settings, Workspace } from '../../src/shared/types'
+import type { Project, Settings, Workspace } from '../../src/shared/types'
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 // In-memory store so status transitions are observable without touching disk.
 const store = vi.hoisted(() => {
   let settings: Settings
+  let projects: Project[] = []
   let workspaces: Workspace[] = []
   return {
-    _set(s: Settings, ws: Workspace[]) {
+    _set(s: Settings, ps: Project[], ws: Workspace[]) {
       settings = s
+      projects = ps
       workspaces = ws
     },
     getSettings: vi.fn(() => settings),
+    getProjects: vi.fn(() => projects),
+    getProject: vi.fn((id: string) => projects.find((p) => p.id === id)),
+    addProject: vi.fn((p: Project) => {
+      projects.push(p)
+    }),
+    removeProject: vi.fn((id: string) => {
+      projects = projects.filter((p) => p.id !== id)
+    }),
     getWorkspaces: vi.fn(() => workspaces),
     getWorkspace: vi.fn((id: string) => workspaces.find((w) => w.id === id)),
     addWorkspace: vi.fn((w: Workspace) => {
@@ -54,8 +64,10 @@ vi.mock('fs', () => fsm)
 
 import {
   beginArchive,
+  createProject,
   createWorkspace,
   deleteArchivedWorkspace,
+  deleteProject,
   finishArchive,
   finishSetup,
   restoreSessions,
@@ -65,22 +77,30 @@ import {
 } from '../../src/main/workspaces'
 
 const settings: Settings = {
-  repoPath: '/repo',
   worktreesDir: '/wt',
   startPort: 3002,
-  setupScript: '',
-  runScript: '',
-  archiveScript: '',
   ideCommand: '',
   claudeArgs: '--dangerously-skip-permissions'
 }
 
+const mkProject = (over: Partial<Project> = {}): Project => ({
+  id: 'p1',
+  name: 'proj',
+  repoPath: '/repo',
+  setupScript: '',
+  runScript: '',
+  archiveScript: '',
+  createdAt: 0,
+  ...over
+})
+
 const mkWs = (over: Partial<Workspace>): Workspace => ({
   id: 'id',
+  projectId: 'p1',
   name: 'ws',
   branch: 'ws',
   baseBranch: undefined,
-  path: '/wt/ws',
+  path: '/wt/proj/ws',
   port: 3002,
   createdAt: 0,
   status: 'active',
@@ -95,7 +115,7 @@ beforeEach(() => {
   git.worktreeRemove.mockResolvedValue(undefined)
   ptym.runTask.mockResolvedValue(0)
   fsm.existsSync.mockReturnValue(false)
-  store._set({ ...settings }, [])
+  store._set({ ...settings }, [mkProject()], [])
 })
 
 describe('slugify', () => {
@@ -110,54 +130,114 @@ describe('slugify', () => {
   })
 })
 
+describe('createProject', () => {
+  it('throws on an empty path', async () => {
+    await expect(createProject('   ')).rejects.toThrow(/path is required/)
+  })
+  it('throws when the folder is not a git repository', async () => {
+    git.isGitRepo.mockResolvedValue(false)
+    await expect(createProject('/not/git')).rejects.toThrow(/not a git repository/)
+  })
+  it('throws on a duplicate repo path', async () => {
+    store._set({ ...settings }, [mkProject({ repoPath: '/repo' })], [])
+    await expect(createProject('/repo')).rejects.toThrow(/already exists/)
+  })
+  it('defaults the name to the repo folder and persists', async () => {
+    store._set({ ...settings }, [], [])
+    const p = await createProject('/some/cool-app')
+    expect(p.name).toBe('cool-app')
+    expect(p.repoPath).toBe('/some/cool-app')
+    expect(store.addProject).toHaveBeenCalledWith(p)
+  })
+  it('honors an explicit name', async () => {
+    store._set({ ...settings }, [], [])
+    const p = await createProject('/some/cool-app', 'My App')
+    expect(p.name).toBe('My App')
+  })
+})
+
+describe('deleteProject', () => {
+  it('tears down every workspace and removes the project', async () => {
+    store._set({ ...settings }, [mkProject({ id: 'p1' })], [
+      mkWs({ id: 'a', projectId: 'p1', branch: 'a', path: '/wt/proj/a' }),
+      mkWs({ id: 'b', projectId: 'p1', branch: 'b', path: '/wt/proj/b' })
+    ])
+    fsm.existsSync.mockReturnValue(true)
+    await deleteProject('p1')
+    expect(ptym.killWorkspace).toHaveBeenCalledWith('a')
+    expect(ptym.killWorkspace).toHaveBeenCalledWith('b')
+    expect(git.worktreeRemove).toHaveBeenCalledWith('/repo', '/wt/proj/a')
+    expect(git.branchDelete).toHaveBeenCalledWith('/repo', 'b')
+    expect(store.removeWorkspace).toHaveBeenCalledWith('a')
+    expect(store.removeProject).toHaveBeenCalledWith('p1')
+  })
+  it('is a no-op for an unknown id', async () => {
+    await deleteProject('nope')
+    expect(store.removeProject).not.toHaveBeenCalled()
+  })
+})
+
 describe('createWorkspace validation', () => {
+  it('throws when the project is missing', async () => {
+    await expect(createWorkspace('nope', 'x')).rejects.toThrow(/Project not found/)
+  })
   it('throws when the repo is not a git repository', async () => {
     git.isGitRepo.mockResolvedValue(false)
-    await expect(createWorkspace('x')).rejects.toThrow(/not a git repository/)
+    await expect(createWorkspace('p1', 'x')).rejects.toThrow(/not a git repository/)
   })
   it('throws on an empty name', async () => {
-    await expect(createWorkspace('   ')).rejects.toThrow(/Name is required/)
+    await expect(createWorkspace('p1', '   ')).rejects.toThrow(/Name is required/)
   })
-  it('throws on a duplicate name/branch in the store', async () => {
-    store._set({ ...settings }, [mkWs({ id: 'a', name: 'dup', branch: 'dup' })])
-    await expect(createWorkspace('dup')).rejects.toThrow(/already exists/)
+  it('throws on a duplicate name/branch within the project', async () => {
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', name: 'dup', branch: 'dup' })])
+    await expect(createWorkspace('p1', 'dup')).rejects.toThrow(/already exists/)
+  })
+  it('allows the same name in a different project', async () => {
+    store._set({ ...settings }, [mkProject({ id: 'p1' }), mkProject({ id: 'p2', name: 'other' })], [
+      mkWs({ id: 'a', projectId: 'p1', name: 'dup', branch: 'dup' })
+    ])
+    const ws = await createWorkspace('p2', 'dup')
+    expect(ws.projectId).toBe('p2')
   })
   it('throws when the git branch already exists', async () => {
     git.branchExists.mockResolvedValue(true)
-    await expect(createWorkspace('feat')).rejects.toThrow(/Branch .* already exists/)
+    await expect(createWorkspace('p1', 'feat')).rejects.toThrow(/Branch .* already exists/)
   })
 })
 
 describe('createWorkspace happy path', () => {
-  it('adds a worktree and persists a setting_up workspace', async () => {
-    const ws = await createWorkspace('feature-x', 'main')
+  it('adds a worktree under the project subfolder and persists a setting_up workspace', async () => {
+    const ws = await createWorkspace('p1', 'feature-x', 'main')
     expect(ws.status).toBe('setting_up')
+    expect(ws.projectId).toBe('p1')
     expect(ws.name).toBe('feature-x')
     expect(ws.branch).toBe('feature-x')
     expect(ws.baseBranch).toBe('main')
     expect(ws.port).toBe(3010)
-    expect(ws.path).toBe('/wt/feature-x')
+    expect(ws.path).toBe('/wt/proj/feature-x')
     expect(ws.id).toBeTruthy()
-    expect(git.worktreeAdd).toHaveBeenCalledWith('/repo', '/wt/feature-x', 'feature-x', 'main')
+    expect(git.worktreeAdd).toHaveBeenCalledWith('/repo', '/wt/proj/feature-x', 'feature-x', 'main')
     expect(store.addWorkspace).toHaveBeenCalledWith(ws)
   })
 
   it('leaves baseBranch undefined when not given', async () => {
-    const ws = await createWorkspace('feature-y')
+    const ws = await createWorkspace('p1', 'feature-y')
     expect(ws.baseBranch).toBeUndefined()
-    expect(git.worktreeAdd).toHaveBeenCalledWith('/repo', '/wt/feature-y', 'feature-y', undefined)
+    expect(git.worktreeAdd).toHaveBeenCalledWith('/repo', '/wt/proj/feature-y', 'feature-y', undefined)
   })
 
   it('deduplicates the worktree path against existing dirs on disk', async () => {
-    fsm.existsSync.mockImplementation((p: string) => p === '/wt/feat')
-    const ws = await createWorkspace('feat')
-    expect(ws.path).toBe('/wt/feat-2')
+    fsm.existsSync.mockImplementation((p: string) => p === '/wt/proj/feat')
+    const ws = await createWorkspace('p1', 'feat')
+    expect(ws.path).toBe('/wt/proj/feat-2')
   })
 })
 
 describe('finishSetup', () => {
   it('runs the setup script, flips to active, starts claude and notifies', async () => {
-    store._set({ ...settings, setupScript: '/setup.sh' }, [mkWs({ id: 'a', status: 'setting_up' })])
+    store._set({ ...settings }, [mkProject({ setupScript: '/setup.sh' })], [
+      mkWs({ id: 'a', status: 'setting_up' })
+    ])
     const onChange = vi.fn()
     await finishSetup('a', onChange)
     expect(ptym.runTask).toHaveBeenCalledWith(expect.objectContaining({ scriptPath: '/setup.sh' }))
@@ -167,7 +247,9 @@ describe('finishSetup', () => {
   })
 
   it('starts claude immediately, in parallel with (not after) the setup script', async () => {
-    store._set({ ...settings, setupScript: '/setup.sh' }, [mkWs({ id: 'a', status: 'setting_up' })])
+    store._set({ ...settings }, [mkProject({ setupScript: '/setup.sh' })], [
+      mkWs({ id: 'a', status: 'setting_up' })
+    ])
     // Hold the setup script open so it never resolves during the assertions.
     let resolveTask: (code: number) => void = () => {}
     ptym.runTask.mockReturnValue(
@@ -192,7 +274,7 @@ describe('finishSetup', () => {
   })
 
   it('passes the configured claude args through to startClaude', async () => {
-    store._set({ ...settings, claudeArgs: '--dangerously-skip-permissions' }, [
+    store._set({ ...settings, claudeArgs: '--dangerously-skip-permissions' }, [mkProject()], [
       mkWs({ id: 'a', status: 'setting_up' })
     ])
     await finishSetup('a', vi.fn())
@@ -202,7 +284,9 @@ describe('finishSetup', () => {
   })
 
   it('still activates and starts claude even when the setup script fails', async () => {
-    store._set({ ...settings, setupScript: '/setup.sh' }, [mkWs({ id: 'a', status: 'setting_up' })])
+    store._set({ ...settings }, [mkProject({ setupScript: '/setup.sh' })], [
+      mkWs({ id: 'a', status: 'setting_up' })
+    ])
     ptym.runTask.mockRejectedValue(new Error('boom'))
     const onChange = vi.fn()
     // claude/active/notify happen before the setup task is awaited, so the
@@ -214,7 +298,7 @@ describe('finishSetup', () => {
   })
 
   it('skips the setup script when none is configured', async () => {
-    store._set({ ...settings }, [mkWs({ id: 'a', status: 'setting_up' })])
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', status: 'setting_up' })])
     await finishSetup('a', vi.fn())
     expect(ptym.runTask).not.toHaveBeenCalled()
     expect(ptym.startClaude).toHaveBeenCalled()
@@ -224,19 +308,25 @@ describe('finishSetup', () => {
     await expect(finishSetup('nope', vi.fn())).resolves.toBeUndefined()
     expect(ptym.startClaude).not.toHaveBeenCalled()
   })
+
+  it('returns without starting claude when the project is gone', async () => {
+    store._set({ ...settings }, [], [mkWs({ id: 'a', status: 'setting_up', projectId: 'gone' })])
+    await expect(finishSetup('a', vi.fn())).resolves.toBeUndefined()
+    expect(ptym.startClaude).not.toHaveBeenCalled()
+  })
 })
 
 describe('restoreSessions healing matrix', () => {
   it('reconciles transient states and restarts claude only for live worktrees', () => {
-    store._set({ ...settings }, [
-      mkWs({ id: 'archived', status: 'archived', path: '/wt/archived' }),
-      mkWs({ id: 'arch-gone', status: 'archiving', path: '/wt/arch-gone' }),
-      mkWs({ id: 'arch-live', status: 'archiving', path: '/wt/arch-live' }),
-      mkWs({ id: 'setup-live', status: 'setting_up', path: '/wt/setup-live' }),
-      mkWs({ id: 'active-live', status: 'active', path: '/wt/active-live' }),
-      mkWs({ id: 'active-gone', status: 'active', path: '/wt/active-gone' })
+    store._set({ ...settings }, [mkProject()], [
+      mkWs({ id: 'archived', status: 'archived', path: '/wt/proj/archived' }),
+      mkWs({ id: 'arch-gone', status: 'archiving', path: '/wt/proj/arch-gone' }),
+      mkWs({ id: 'arch-live', status: 'archiving', path: '/wt/proj/arch-live' }),
+      mkWs({ id: 'setup-live', status: 'setting_up', path: '/wt/proj/setup-live' }),
+      mkWs({ id: 'active-live', status: 'active', path: '/wt/proj/active-live' }),
+      mkWs({ id: 'active-gone', status: 'active', path: '/wt/proj/active-gone' })
     ])
-    const present = new Set(['/wt/arch-live', '/wt/setup-live', '/wt/active-live'])
+    const present = new Set(['/wt/proj/arch-live', '/wt/proj/setup-live', '/wt/proj/active-live'])
     fsm.existsSync.mockImplementation((p: string) => present.has(p))
 
     restoreSessions()
@@ -252,14 +342,21 @@ describe('restoreSessions healing matrix', () => {
   })
 
   it('restarts claude with the configured args', () => {
-    store._set({ ...settings, claudeArgs: '--dangerously-skip-permissions' }, [
-      mkWs({ id: 'a', status: 'active', path: '/wt/a' })
+    store._set({ ...settings, claudeArgs: '--dangerously-skip-permissions' }, [mkProject()], [
+      mkWs({ id: 'a', status: 'active', path: '/wt/proj/a' })
     ])
     fsm.existsSync.mockReturnValue(true)
     restoreSessions()
     expect(ptym.startClaude).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'a', args: '--dangerously-skip-permissions' })
     )
+  })
+
+  it('skips workspaces whose project is gone', () => {
+    store._set({ ...settings }, [], [mkWs({ id: 'a', status: 'active', projectId: 'gone' })])
+    fsm.existsSync.mockReturnValue(true)
+    restoreSessions()
+    expect(ptym.startClaude).not.toHaveBeenCalled()
   })
 })
 
@@ -268,11 +365,11 @@ describe('runWorkspace', () => {
     await expect(runWorkspace('nope')).rejects.toThrow(/not found/)
   })
   it('throws when no run script is configured', async () => {
-    store._set({ ...settings, runScript: '' }, [mkWs({ id: 'a' })])
+    store._set({ ...settings }, [mkProject({ runScript: '' })], [mkWs({ id: 'a' })])
     await expect(runWorkspace('a')).rejects.toThrow(/No run script/)
   })
   it('runs the run script as a tracked task', async () => {
-    store._set({ ...settings, runScript: '/run.sh' }, [mkWs({ id: 'a' })])
+    store._set({ ...settings }, [mkProject({ runScript: '/run.sh' })], [mkWs({ id: 'a' })])
     await runWorkspace('a')
     expect(ptym.runTask).toHaveBeenCalledWith(
       expect.objectContaining({ scriptPath: '/run.sh', track: true })
@@ -282,7 +379,7 @@ describe('runWorkspace', () => {
 
 describe('beginArchive', () => {
   it('stops the task and flips status to archiving', () => {
-    store._set({ ...settings }, [mkWs({ id: 'a', status: 'active' })])
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', status: 'active' })])
     beginArchive('a')
     expect(ptym.stopTask).toHaveBeenCalledWith('a')
     expect(store.updateWorkspaceStatus).toHaveBeenCalledWith('a', 'archiving')
@@ -296,18 +393,20 @@ describe('beginArchive', () => {
 
 describe('finishArchive', () => {
   it('runs the archive script, kills PTYs, removes the worktree and archives', async () => {
-    store._set({ ...settings, archiveScript: '/arch.sh' }, [mkWs({ id: 'a', status: 'archiving' })])
+    store._set({ ...settings }, [mkProject({ archiveScript: '/arch.sh' })], [
+      mkWs({ id: 'a', status: 'archiving' })
+    ])
     const onChange = vi.fn()
     await finishArchive('a', onChange)
     expect(ptym.runTask).toHaveBeenCalledWith(expect.objectContaining({ scriptPath: '/arch.sh' }))
     expect(ptym.killWorkspace).toHaveBeenCalledWith('a')
-    expect(git.worktreeRemove).toHaveBeenCalledWith('/repo', '/wt/ws')
+    expect(git.worktreeRemove).toHaveBeenCalledWith('/repo', '/wt/proj/ws')
     expect(store.updateWorkspaceStatus).toHaveBeenCalledWith('a', 'archived')
     expect(onChange).toHaveBeenCalled()
   })
 
   it('still archives and notifies when a step throws', async () => {
-    store._set({ ...settings }, [mkWs({ id: 'a', status: 'archiving' })])
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', status: 'archiving' })])
     git.worktreeRemove.mockRejectedValue(new Error('busy'))
     const onChange = vi.fn()
     await finishArchive('a', onChange)
@@ -323,51 +422,61 @@ describe('finishArchive', () => {
 
 describe('restoreWorktree', () => {
   it('throws when the repo is invalid', async () => {
-    store._set({ ...settings }, [mkWs({ id: 'a', status: 'archived' })])
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', status: 'archived' })])
     git.isGitRepo.mockResolvedValue(false)
     await expect(restoreWorktree('a')).rejects.toThrow(/not a git repository/)
   })
 
   it('re-adds on the existing branch and flips to setting_up', async () => {
-    store._set({ ...settings }, [mkWs({ id: 'a', status: 'archived', branch: 'feat' })])
+    store._set({ ...settings }, [mkProject()], [
+      mkWs({ id: 'a', status: 'archived', branch: 'feat' })
+    ])
     git.branchExists.mockResolvedValue(true)
     await restoreWorktree('a')
     expect(git.worktreePrune).toHaveBeenCalled()
-    expect(git.worktreeAddExisting).toHaveBeenCalledWith('/repo', '/wt/ws', 'feat')
+    expect(git.worktreeAddExisting).toHaveBeenCalledWith('/repo', '/wt/proj/ws', 'feat')
     expect(git.worktreeAdd).not.toHaveBeenCalled()
     expect(store.updateWorkspaceStatus).toHaveBeenCalledWith('a', 'setting_up')
   })
 
   it('recreates the branch fresh when it was deleted out-of-band', async () => {
-    store._set({ ...settings }, [mkWs({ id: 'a', status: 'archived', branch: 'feat' })])
+    store._set({ ...settings }, [mkProject()], [
+      mkWs({ id: 'a', status: 'archived', branch: 'feat' })
+    ])
     git.branchExists.mockResolvedValue(false)
     await restoreWorktree('a')
-    expect(git.worktreeAdd).toHaveBeenCalledWith('/repo', '/wt/ws', 'feat')
+    expect(git.worktreeAdd).toHaveBeenCalledWith('/repo', '/wt/proj/ws', 'feat')
     expect(git.worktreeAddExisting).not.toHaveBeenCalled()
   })
 
   it('removes a leftover worktree directory before re-adding', async () => {
-    store._set({ ...settings }, [mkWs({ id: 'a', status: 'archived', branch: 'feat' })])
+    store._set({ ...settings }, [mkProject()], [
+      mkWs({ id: 'a', status: 'archived', branch: 'feat' })
+    ])
     fsm.existsSync.mockReturnValue(true)
     git.branchExists.mockResolvedValue(true)
     await restoreWorktree('a')
-    expect(git.worktreeRemove).toHaveBeenCalledWith('/repo', '/wt/ws')
+    expect(git.worktreeRemove).toHaveBeenCalledWith('/repo', '/wt/proj/ws')
   })
 })
 
 describe('deleteArchivedWorkspace', () => {
   it('kills PTYs, removes leftover worktree, deletes the branch and drops it', async () => {
-    store._set({ ...settings }, [mkWs({ id: 'a', status: 'archived', branch: 'feat' })])
+    store._set({ ...settings }, [mkProject()], [
+      mkWs({ id: 'a', status: 'archived', branch: 'feat' })
+    ])
     fsm.existsSync.mockReturnValue(true)
     await deleteArchivedWorkspace('a')
     expect(ptym.killWorkspace).toHaveBeenCalledWith('a')
-    expect(git.worktreeRemove).toHaveBeenCalledWith('/repo', '/wt/ws')
+    expect(git.worktreeRemove).toHaveBeenCalledWith('/repo', '/wt/proj/ws')
     expect(git.branchDelete).toHaveBeenCalledWith('/repo', 'feat')
     expect(store.removeWorkspace).toHaveBeenCalledWith('a')
   })
 
   it('still removes from the store when the branch is already gone', async () => {
-    store._set({ ...settings }, [mkWs({ id: 'a', status: 'archived', branch: 'feat' })])
+    store._set({ ...settings }, [mkProject()], [
+      mkWs({ id: 'a', status: 'archived', branch: 'feat' })
+    ])
     git.branchDelete.mockRejectedValue(new Error('not found'))
     await deleteArchivedWorkspace('a')
     expect(store.removeWorkspace).toHaveBeenCalledWith('a')

@@ -4,6 +4,8 @@ import { Sidebar } from './components/Sidebar'
 import { Toolbar } from './components/Toolbar'
 import { TerminalView } from './components/TerminalView'
 import { SettingsModal } from './components/SettingsModal'
+import { NewProjectModal } from './components/NewProjectModal'
+import { ProjectSettingsModal } from './components/ProjectSettingsModal'
 import { NewWorkspaceModal } from './components/NewWorkspaceModal'
 import { ArchivedModal } from './components/ArchivedModal'
 import { ConfirmModal } from './components/ConfirmModal'
@@ -15,9 +17,12 @@ export function App(): JSX.Element {
     activeId,
     activeKind,
     showSettings,
-    showNew,
+    showNewProject,
+    newWorkspaceProjectId,
+    projectSettingsId,
     showArchived,
     load,
+    setProjects,
     setWorkspaces,
     setRunning
   } = useStore()
@@ -27,6 +32,7 @@ export function App(): JSX.Element {
 
     const offData = window.api.onPtyData(({ id, kind, data }) => writeData(id, kind, data))
     const offRunning = window.api.onTaskRunning(({ id, running }) => setRunning(id, running))
+    const offProjects = window.api.onProjectsChanged((next) => setProjects(next))
     const offChanged = window.api.onWorkspacesChanged((next) => {
       const state = useStore.getState()
       const prev = state.workspaces
@@ -50,6 +56,7 @@ export function App(): JSX.Element {
     return () => {
       offData()
       offRunning()
+      offProjects()
       offChanged()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -68,12 +75,14 @@ export function App(): JSX.Element {
           </>
         ) : (
           <div className="placeholder">
-            Створи воркспейс, щоб почати сесію Claude в ізольованому git worktree.
+            Додай проект і створи воркспейс, щоб почати сесію Claude в ізольованому git worktree.
           </div>
         )}
       </div>
       {showSettings && <SettingsModal />}
-      {showNew && <NewWorkspaceModal />}
+      {showNewProject && <NewProjectModal />}
+      {projectSettingsId && <ProjectSettingsModal />}
+      {newWorkspaceProjectId && <NewWorkspaceModal />}
       {showArchived && <ArchivedModal />}
       <ConfirmModal />
     </div>

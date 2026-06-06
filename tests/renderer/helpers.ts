@@ -1,24 +1,32 @@
 import { vi } from 'vitest'
-import type { Settings, Workspace } from '../../src/shared/types'
+import type { Project, Settings, Workspace } from '../../src/shared/types'
 import { useStore } from '../../src/renderer/src/store'
 
 export const settings: Settings = {
-  repoPath: '/repo',
   worktreesDir: '/wt',
   startPort: 3002,
-  setupScript: '',
-  runScript: '',
-  archiveScript: '',
   ideCommand: '',
   claudeArgs: '--dangerously-skip-permissions'
 }
 
+export const mkProject = (over: Partial<Project> = {}): Project => ({
+  id: 'p1',
+  name: 'proj',
+  repoPath: '/repo',
+  setupScript: '',
+  runScript: '',
+  archiveScript: '',
+  createdAt: 0,
+  ...over
+})
+
 export const mkWs = (over: Partial<Workspace> = {}): Workspace => ({
   id: 'id',
+  projectId: 'p1',
   name: 'ws',
   branch: 'ws',
   baseBranch: undefined,
-  path: '/wt/ws',
+  path: '/wt/proj/ws',
   port: 3002,
   createdAt: 0,
   status: 'active',
@@ -34,6 +42,11 @@ export function makeApi() {
     copyText: vi.fn(),
     pickFile: vi.fn(async () => null),
     pickDir: vi.fn(async () => null),
+    listProjects: vi.fn(async () => [] as Project[]),
+    createProject: vi.fn(async () => mkProject({ id: 'new' })),
+    updateProject: vi.fn(async (p: Project) => p),
+    deleteProject: vi.fn(async () => {}),
+    onProjectsChanged: vi.fn(() => () => {}),
     listWorkspaces: vi.fn(async () => [] as Workspace[]),
     listBranches: vi.fn(async () => ({ branches: ['main'], defaultBranch: 'main' })),
     currentBranch: vi.fn(async () => 'main'),
@@ -62,11 +75,14 @@ export type Api = ReturnType<typeof makeApi>
 export function resetStore(): void {
   useStore.setState({
     settings: null,
+    projects: [],
     workspaces: [],
     activeId: null,
     activeKind: 'claude',
     showSettings: false,
-    showNew: false,
+    newWorkspaceProjectId: null,
+    showNewProject: false,
+    projectSettingsId: null,
     showArchived: false,
     busy: false,
     error: null,

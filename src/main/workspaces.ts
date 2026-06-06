@@ -1,13 +1,17 @@
 import { randomUUID } from 'crypto'
 import { existsSync, mkdirSync } from 'fs'
-import { join } from 'path'
-import type { Workspace } from '../shared/types'
+import { basename, join } from 'path'
+import type { Project, Workspace } from '../shared/types'
 import {
+  addProject,
   addWorkspace,
+  getProject,
+  getProjects,
   getSettings,
   getWorkspace,
   getWorkspaces,
   nextPort,
+  removeProject,
   removeWorkspace,
   updateWorkspaceStatus
 } from './store'
@@ -33,47 +37,116 @@ export function slugify(name: string): string {
   )
 }
 
+// ── Projects ──────────────────────────────────────────────────────────────────
+
 /**
- * Create a workspace: add a git worktree + branch and persist it. Returns
- * immediately with status 'setting_up' so the UI does not block. The setup
- * script and Claude session are started afterwards via finishSetup().
+ * Register a git repository as a project. Validates the path is a git repo and
+ * isn't already registered, then persists it. Workspaces are created under it.
  */
-export async function createWorkspace(name: string, baseBranch?: string): Promise<Workspace> {
+export async function createProject(repoPath: string, name?: string): Promise<Project> {
+  const path = repoPath.trim()
+  if (!path) throw new Error('Project path is required.')
+  if (!(await isGitRepo(path))) {
+    throw new Error('Selected folder is not a git repository.')
+  }
+  if (getProjects().some((p) => p.repoPath === path)) {
+    throw new Error('A project for this repository already exists.')
+  }
+  const project: Project = {
+    id: randomUUID(),
+    name: name?.trim() || basename(path) || 'project',
+    repoPath: path,
+    setupScript: '',
+    runScript: '',
+    archiveScript: '',
+    createdAt: Date.now()
+  }
+  addProject(project)
+  return project
+}
+
+/**
+ * Permanently delete a project and every workspace under it: kill PTYs, remove
+ * the worktrees, delete the git branches, then drop the project from the store.
+ */
+export async function deleteProject(id: string): Promise<void> {
+  const project = getProject(id)
+  if (!project) return
+  for (const ws of getWorkspaces().filter((w) => w.projectId === id)) {
+    killWorkspace(ws.id)
+    if (existsSync(ws.path)) {
+      try {
+        await worktreeRemove(project.repoPath, ws.path)
+      } catch {
+        /* ignore — best effort */
+      }
+    }
+    try {
+      await worktreePrune(project.repoPath)
+      await branchDelete(project.repoPath, ws.branch)
+    } catch {
+      /* branch may already be gone */
+    }
+    removeWorkspace(ws.id)
+  }
+  removeProject(id)
+}
+
+// ── Workspaces ──────────────────────────────────────────────────────────────
+
+/**
+ * Create a workspace under a project: add a git worktree + branch and persist
+ * it. Returns immediately with status 'setting_up' so the UI does not block. The
+ * setup script and Claude session are started afterwards via finishSetup().
+ */
+export async function createWorkspace(
+  projectId: string,
+  name: string,
+  baseBranch?: string
+): Promise<Workspace> {
   const settings = getSettings()
-  if (!(await isGitRepo(settings.repoPath))) {
-    throw new Error('Repository path is not a git repository. Set it in Settings.')
+  const project = getProject(projectId)
+  if (!project) throw new Error('Project not found.')
+  if (!(await isGitRepo(project.repoPath))) {
+    throw new Error('Project path is not a git repository. Check the project settings.')
   }
 
   // One field is both the display name and the full branch name (no forced prefix).
   const branchName = name.trim()
   if (!branchName) throw new Error('Name is required.')
-  // No other workspace (active or archived) may already use this name/branch.
-  if (getWorkspaces().some((w) => w.name === branchName || w.branch === branchName)) {
+  // No other workspace in this project (active or archived) may reuse the name/branch.
+  if (
+    getWorkspaces().some(
+      (w) => w.projectId === projectId && (w.name === branchName || w.branch === branchName)
+    )
+  ) {
     throw new Error(`A workspace named "${branchName}" already exists.`)
   }
   // The git branch must not already exist — `git worktree add -b` would fail.
-  if (await branchExists(settings.repoPath, branchName)) {
+  if (await branchExists(project.repoPath, branchName)) {
     throw new Error(`Branch "${branchName}" already exists. Choose another name.`)
   }
 
-  // The worktree directory is derived from a filesystem-safe slug and
-  // deduplicated against app state and disk so checkouts never collide.
+  // Worktrees live under a per-project subfolder so names can't collide across
+  // projects. The leaf is a filesystem-safe slug, deduped against state and disk.
+  const baseDir = join(settings.worktreesDir, slugify(project.name))
   const slug = slugify(branchName)
   const taken = new Set(getWorkspaces().map((w) => w.path))
   let candidate = slug
-  let wtPath = join(settings.worktreesDir, candidate)
+  let wtPath = join(baseDir, candidate)
   let suffix = 2
   while (taken.has(wtPath) || existsSync(wtPath)) {
     candidate = `${slug}-${suffix}`
-    wtPath = join(settings.worktreesDir, candidate)
+    wtPath = join(baseDir, candidate)
     suffix++
   }
 
-  mkdirSync(settings.worktreesDir, { recursive: true })
-  await worktreeAdd(settings.repoPath, wtPath, branchName, baseBranch)
+  mkdirSync(baseDir, { recursive: true })
+  await worktreeAdd(project.repoPath, wtPath, branchName, baseBranch)
 
   const ws: Workspace = {
     id: randomUUID(),
+    projectId,
     // Name and branch are the same user-chosen value; the worktree dir uses the
     // slugified, deduped form on disk.
     name: branchName,
@@ -98,17 +171,19 @@ export async function finishSetup(id: string, onChange: () => void): Promise<voi
   const settings = getSettings()
   const ws = getWorkspace(id)
   if (!ws) return
-  const env = buildEnv(ws, settings)
+  const project = getProject(ws.projectId)
+  if (!project) return
+  const env = buildEnv(ws, project)
   // Flip to active and start Claude right away so the window opens without
   // blocking on the setup script.
   updateWorkspaceStatus(ws.id, 'active')
   startClaude({ id: ws.id, cwd: ws.path, env, cols: 80, rows: 24, args: settings.claudeArgs })
   onChange()
   // Run the setup script alongside the now-live Claude session.
-  if (settings.setupScript) {
+  if (project.setupScript) {
     await runTask({
       id: ws.id,
-      scriptPath: settings.setupScript,
+      scriptPath: project.setupScript,
       label: 'setup',
       cwd: ws.path,
       env,
@@ -128,6 +203,8 @@ export function restoreSessions(): void {
   const settings = getSettings()
   for (const ws of getWorkspaces()) {
     if (ws.status === 'archived') continue
+    const project = getProject(ws.projectId)
+    if (!project) continue
     const exists = existsSync(ws.path)
     // Heal stuck transient states left by an interrupted setup/archive.
     if (ws.status === 'archiving') {
@@ -142,7 +219,7 @@ export function restoreSessions(): void {
     startClaude({
       id: ws.id,
       cwd: ws.path,
-      env: buildEnv(ws, settings),
+      env: buildEnv(ws, project),
       cols: 80,
       rows: 24,
       args: settings.claudeArgs
@@ -155,24 +232,26 @@ export function restoreSessions(): void {
  * Called when the user opens the Terminal tab; restarts it if it had exited.
  */
 export function ensureShell(id: string): void {
-  const settings = getSettings()
   const ws = getWorkspace(id)
   if (!ws) return
-  startShell({ id: ws.id, cwd: ws.path, env: buildEnv(ws, settings), cols: 80, rows: 24 })
+  const project = getProject(ws.projectId)
+  if (!project) return
+  startShell({ id: ws.id, cwd: ws.path, env: buildEnv(ws, project), cols: 80, rows: 24 })
 }
 
 /** Run the configured run script in the workspace (does not wait for it). */
 export async function runWorkspace(id: string): Promise<void> {
-  const settings = getSettings()
   const ws = getWorkspace(id)
   if (!ws) throw new Error('Workspace not found')
-  if (!settings.runScript) throw new Error('No run script configured. Set it in Settings.')
+  const project = getProject(ws.projectId)
+  if (!project) throw new Error('Project not found')
+  if (!project.runScript) throw new Error('No run script configured. Set it in the project settings.')
   void runTask({
     id: ws.id,
-    scriptPath: settings.runScript,
+    scriptPath: project.runScript,
     label: 'run',
     cwd: ws.path,
-    env: buildEnv(ws, settings),
+    env: buildEnv(ws, project),
     cols: 80,
     rows: 24,
     track: true
@@ -193,24 +272,24 @@ export function beginArchive(id: string): void {
  * Calls onChange when the workspace is finally dropped from the list.
  */
 export async function finishArchive(id: string, onChange: () => void): Promise<void> {
-  const settings = getSettings()
   const ws = getWorkspace(id)
   if (!ws) return
+  const project = getProject(ws.projectId)
 
   try {
-    if (settings.archiveScript) {
+    if (project?.archiveScript) {
       await runTask({
         id: ws.id,
-        scriptPath: settings.archiveScript,
+        scriptPath: project.archiveScript,
         label: 'archive',
         cwd: ws.path,
-        env: buildEnv(ws, settings),
+        env: buildEnv(ws, project),
         cols: 80,
         rows: 24
       })
     }
     killWorkspace(ws.id)
-    await worktreeRemove(settings.repoPath, ws.path)
+    if (project) await worktreeRemove(project.repoPath, ws.path)
   } catch (err) {
     // Surface the error but still archive the workspace so the UI stays consistent.
     console.error('archive failed:', err)
@@ -228,26 +307,27 @@ export async function finishArchive(id: string, onChange: () => void): Promise<v
  * afterwards via finishSetup(). Throws if the repo is missing.
  */
 export async function restoreWorktree(id: string): Promise<void> {
-  const settings = getSettings()
   const ws = getWorkspace(id)
   if (!ws) throw new Error('Workspace not found')
-  if (!(await isGitRepo(settings.repoPath))) {
-    throw new Error('Repository path is not a git repository. Set it in Settings.')
+  const project = getProject(ws.projectId)
+  if (!project) throw new Error('Project not found')
+  if (!(await isGitRepo(project.repoPath))) {
+    throw new Error('Project path is not a git repository. Check the project settings.')
   }
   // Clean any stale worktree refs / leftover directory before re-adding.
-  await worktreePrune(settings.repoPath)
+  await worktreePrune(project.repoPath)
   if (existsSync(ws.path)) {
     try {
-      await worktreeRemove(settings.repoPath, ws.path)
+      await worktreeRemove(project.repoPath, ws.path)
     } catch {
       /* ignore — git will error on add if the path is truly unusable */
     }
   }
-  if (await branchExists(settings.repoPath, ws.branch)) {
-    await worktreeAddExisting(settings.repoPath, ws.path, ws.branch)
+  if (await branchExists(project.repoPath, ws.branch)) {
+    await worktreeAddExisting(project.repoPath, ws.path, ws.branch)
   } else {
     // Branch was deleted out-of-band; recreate it fresh.
-    await worktreeAdd(settings.repoPath, ws.path, ws.branch)
+    await worktreeAdd(project.repoPath, ws.path, ws.branch)
   }
   updateWorkspaceStatus(id, 'setting_up')
 }
@@ -257,23 +337,25 @@ export async function restoreWorktree(id: string): Promise<void> {
  * worktree, delete the git branch and drop it from the store.
  */
 export async function deleteArchivedWorkspace(id: string): Promise<void> {
-  const settings = getSettings()
   const ws = getWorkspace(id)
   if (!ws) return
+  const project = getProject(ws.projectId)
   killWorkspace(ws.id)
-  if (existsSync(ws.path)) {
+  if (project && existsSync(ws.path)) {
     try {
-      await worktreeRemove(settings.repoPath, ws.path)
+      await worktreeRemove(project.repoPath, ws.path)
     } catch {
       /* ignore */
     }
   }
-  try {
-    await worktreePrune(settings.repoPath)
-    await branchDelete(settings.repoPath, ws.branch)
-  } catch (err) {
-    // Branch may already be gone; deletion of the workspace should still proceed.
-    console.error('delete branch failed:', err)
+  if (project) {
+    try {
+      await worktreePrune(project.repoPath)
+      await branchDelete(project.repoPath, ws.branch)
+    } catch (err) {
+      // Branch may already be gone; deletion of the workspace should still proceed.
+      console.error('delete branch failed:', err)
+    }
   }
   removeWorkspace(ws.id)
 }

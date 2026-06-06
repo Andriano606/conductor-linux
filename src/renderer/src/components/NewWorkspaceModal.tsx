@@ -15,7 +15,10 @@ const SUGGESTIONS = [
 ]
 
 export function NewWorkspaceModal(): JSX.Element {
-  const { workspaces, createWorkspace, openNew, busy, error, clearError } = useStore()
+  const { projects, workspaces, newWorkspaceProjectId, createWorkspace, openNewWorkspace, busy, error, clearError } =
+    useStore()
+  const projectId = newWorkspaceProjectId as string
+  const project = projects.find((p) => p.id === projectId)
   // One field: both the workspace name and the full branch name.
   const [name, setName] = useState(SUGGESTIONS[Math.floor(performance.now()) % SUGGESTIONS.length])
 
@@ -29,7 +32,7 @@ export function NewWorkspaceModal(): JSX.Element {
   useEffect(() => {
     let cancelled = false
     window.api
-      .listBranches()
+      .listBranches(projectId)
       .then(({ branches, defaultBranch }) => {
         if (cancelled) return
         setBranches(branches)
@@ -40,7 +43,7 @@ export function NewWorkspaceModal(): JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [projectId])
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -48,23 +51,26 @@ export function NewWorkspaceModal(): JSX.Element {
   }, [branches, search])
 
   const trimmed = name.trim()
-  // Live validation: no existing workspace (active or archived) with this name/branch.
+  // Live validation: no existing workspace (active or archived) in this project with this name/branch.
   const duplicate = useMemo(
-    () => !!trimmed && workspaces.some((w) => w.name === trimmed || w.branch === trimmed),
-    [workspaces, trimmed]
+    () =>
+      !!trimmed &&
+      workspaces.some(
+        (w) => w.projectId === projectId && (w.name === trimmed || w.branch === trimmed)
+      ),
+    [workspaces, trimmed, projectId]
   )
 
-  const canSubmit =
-    !busy && !!trimmed && !duplicate && (!!base || branches.length === 0)
+  const canSubmit = !busy && !!trimmed && !duplicate && (!!base || branches.length === 0)
 
   const submit = (): void => {
-    if (canSubmit) void createWorkspace(trimmed, base || undefined)
+    if (canSubmit) void createWorkspace(projectId, trimmed, base || undefined)
   }
 
   return (
-    <div className="modal-backdrop" onClick={() => !busy && openNew(false)}>
+    <div className="modal-backdrop" onClick={() => !busy && openNewWorkspace(null)}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 460 }}>
-        <h2>Новий воркспейс</h2>
+        <h2>Новий воркспейс{project ? ` · ${project.name}` : ''}</h2>
 
         <div className="field">
           <label>Назва / гілка</label>
@@ -127,7 +133,7 @@ export function NewWorkspaceModal(): JSX.Element {
         </div>
 
         <div className="modal-actions">
-          <button className="btn" disabled={busy} onClick={() => openNew(false)}>
+          <button className="btn" disabled={busy} onClick={() => openNewWorkspace(null)}>
             Скасувати
           </button>
           <button className="btn primary" disabled={!canSubmit} onClick={submit}>

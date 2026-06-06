@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import type { Settings, Workspace } from '../../src/shared/types'
+import type { Project, Settings, Workspace } from '../../src/shared/types'
 
 // app.getPath is the only electron surface store.ts touches.
 const h = vi.hoisted(() => ({ userData: '', home: '' }))
@@ -11,23 +11,40 @@ vi.mock('electron', () => ({
 }))
 
 import {
+  addProject,
   addWorkspace,
+  getProject,
+  getProjects,
   getSettings,
   getWorkspace,
   getWorkspaces,
   initStore,
   nextPort,
+  removeProject,
   removeWorkspace,
   setSettings,
+  updateProject,
   updateWorkspaceStatus
 } from '../../src/main/store'
 
+const mkProject = (over: Partial<Project> = {}): Project => ({
+  id: over.id ?? 'p-' + Math.random().toString(36).slice(2),
+  name: 'proj',
+  repoPath: '/repo',
+  setupScript: '',
+  runScript: '',
+  archiveScript: '',
+  createdAt: 0,
+  ...over
+})
+
 const mkWs = (over: Partial<Workspace> = {}): Workspace => ({
   id: over.id ?? 'id-' + Math.random().toString(36).slice(2),
+  projectId: 'p1',
   name: 'ws',
   branch: 'ws',
   baseBranch: undefined,
-  path: '/wt/ws',
+  path: '/wt/proj/ws',
   port: 3002,
   createdAt: 0,
   status: 'active',
@@ -51,42 +68,80 @@ describe('initStore', () => {
   it('uses defaults on a fresh install', () => {
     initStore()
     const s = getSettings()
-    expect(s.repoPath).toBe('')
     expect(s.startPort).toBe(3002)
     expect(s.worktreesDir).toBe(join(tmp, '.conductor-linux', 'worktrees'))
     expect(s.claudeArgs).toBe('--dangerously-skip-permissions')
+    expect(getProjects()).toEqual([])
     expect(getWorkspaces()).toEqual([])
   })
 
-  it('loads an existing file and merges partial settings over defaults', () => {
+  it('loads an existing modern file and merges partial settings over defaults', () => {
     writeFileSync(
       dataFile(),
       JSON.stringify({
-        settings: { repoPath: '/my/repo', startPort: 4000 },
+        settings: { startPort: 4000 },
+        projects: [mkProject({ id: 'p1' })],
         workspaces: [mkWs({ id: 'w1' })]
       })
     )
     initStore()
     const s = getSettings()
-    expect(s.repoPath).toBe('/my/repo')
     expect(s.startPort).toBe(4000)
     // Missing keys are backfilled from defaults.
-    expect(s.setupScript).toBe('')
     expect(s.ideCommand).toBe('')
     expect(s.claudeArgs).toBe('--dangerously-skip-permissions')
+    expect(getProjects()).toHaveLength(1)
     expect(getWorkspaces()).toHaveLength(1)
+  })
+
+  it('migrates a legacy file: folds repoPath/scripts into a project and stamps workspaces', () => {
+    writeFileSync(
+      dataFile(),
+      JSON.stringify({
+        settings: {
+          repoPath: '/my/repo',
+          worktreesDir: '/wt',
+          startPort: 4000,
+          setupScript: '/s.sh',
+          runScript: '/r.sh',
+          archiveScript: '/a.sh',
+          ideCommand: 'code',
+          claudeArgs: '--foo'
+        },
+        // Legacy workspaces have no projectId and no projects array exists.
+        workspaces: [{ id: 'w1', name: 'ws', branch: 'ws', path: '/wt/ws', port: 3002, createdAt: 0, status: 'active' }]
+      })
+    )
+    initStore()
+    // Global settings keep only the global keys.
+    const s = getSettings()
+    expect(s).toEqual({ worktreesDir: '/wt', startPort: 4000, ideCommand: 'code', claudeArgs: '--foo' })
+    expect((s as unknown as Record<string, unknown>).repoPath).toBeUndefined()
+    // A single project carries the legacy repo + scripts.
+    const projects = getProjects()
+    expect(projects).toHaveLength(1)
+    expect(projects[0]).toMatchObject({
+      name: 'repo',
+      repoPath: '/my/repo',
+      setupScript: '/s.sh',
+      runScript: '/r.sh',
+      archiveScript: '/a.sh'
+    })
+    // The orphan workspace is stamped with the new project id.
+    expect(getWorkspaces()[0].projectId).toBe(projects[0].id)
   })
 
   it('falls back to defaults on corrupt JSON', () => {
     writeFileSync(dataFile(), '{ not valid json')
     expect(() => initStore()).not.toThrow()
-    expect(getSettings().repoPath).toBe('')
+    expect(getProjects()).toEqual([])
     expect(getWorkspaces()).toEqual([])
   })
 
-  it('tolerates a file missing the workspaces array', () => {
-    writeFileSync(dataFile(), JSON.stringify({ settings: { repoPath: '/r' } }))
+  it('tolerates a file missing the arrays', () => {
+    writeFileSync(dataFile(), JSON.stringify({ settings: { startPort: 5000 } }))
     initStore()
+    expect(getProjects()).toEqual([])
     expect(getWorkspaces()).toEqual([])
   })
 })
@@ -96,12 +151,8 @@ describe('settings persistence', () => {
 
   it('setSettings round-trips and persists to disk', () => {
     const next: Settings = {
-      repoPath: '/repo',
       worktreesDir: '/wt',
       startPort: 3500,
-      setupScript: '/s.sh',
-      runScript: '/r.sh',
-      archiveScript: '/a.sh',
       ideCommand: 'code',
       claudeArgs: '--dangerously-skip-permissions'
     }
@@ -109,6 +160,40 @@ describe('settings persistence', () => {
     expect(getSettings()).toEqual(next)
     const onDisk = JSON.parse(readFileSync(dataFile(), 'utf8'))
     expect(onDisk.settings).toEqual(next)
+  })
+})
+
+describe('project CRUD', () => {
+  beforeEach(() => initStore())
+
+  it('adds and reads projects', () => {
+    addProject(mkProject({ id: 'a' }))
+    addProject(mkProject({ id: 'b' }))
+    expect(getProjects().map((p) => p.id)).toEqual(['a', 'b'])
+    expect(getProject('b')?.id).toBe('b')
+    expect(getProject('missing')).toBeUndefined()
+  })
+
+  it('persists adds to disk', () => {
+    addProject(mkProject({ id: 'a' }))
+    const onDisk = JSON.parse(readFileSync(dataFile(), 'utf8'))
+    expect(onDisk.projects).toHaveLength(1)
+  })
+
+  it('updateProject replaces by id and returns it; unknown id is a no-op', () => {
+    addProject(mkProject({ id: 'a', name: 'old' }))
+    const saved = updateProject(mkProject({ id: 'a', name: 'new' }))
+    expect(saved?.name).toBe('new')
+    expect(getProject('a')?.name).toBe('new')
+    expect(updateProject(mkProject({ id: 'missing' }))).toBeUndefined()
+  })
+
+  it('removes a project; removing an unknown id is a no-op', () => {
+    addProject(mkProject({ id: 'a' }))
+    removeProject('missing')
+    expect(getProjects()).toHaveLength(1)
+    removeProject('a')
+    expect(getProjects()).toHaveLength(0)
   })
 })
 

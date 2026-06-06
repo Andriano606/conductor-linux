@@ -1,14 +1,24 @@
 import { spawn } from 'child_process'
 import { BrowserWindow, Menu, clipboard, dialog, ipcMain, shell } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
-import type { PtyKind, Settings } from '../shared/types'
-import { getSettings, getWorkspace, getWorkspaces, setSettings } from './store'
+import type { Project, PtyKind, Settings } from '../shared/types'
+import {
+  getProject,
+  getProjects,
+  getSettings,
+  getWorkspace,
+  getWorkspaces,
+  setSettings,
+  updateProject
+} from './store'
 import { currentBranch, isGitRepo, listBranches } from './git'
 import { attach, resize, stopTask, write } from './ptyManager'
 import {
   beginArchive,
+  createProject,
   createWorkspace,
   deleteArchivedWorkspace,
+  deleteProject,
   ensureShell,
   finishArchive,
   finishSetup,
@@ -22,12 +32,21 @@ function notifyWorkspacesChanged(): void {
   }
 }
 
+function notifyProjectsChanged(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('projects:changed', getProjects())
+  }
+}
+
 export function registerIpc(): void {
   // ---- Settings ----
   ipcMain.handle('settings:get', () => getSettings())
   ipcMain.handle('settings:set', (_e, settings: Settings) => setSettings(settings))
   ipcMain.handle('settings:isGitRepo', (_e, path: string) => isGitRepo(path))
-  ipcMain.handle('git:branches', () => listBranches(getSettings().repoPath))
+  ipcMain.handle('git:branches', (_e, projectId: string) => {
+    const project = getProject(projectId)
+    return project ? listBranches(project.repoPath) : { branches: [], defaultBranch: '' }
+  })
   ipcMain.handle('git:currentBranch', (_e, id: string) => {
     const ws = getWorkspaces().find((w) => w.id === id)
     return ws ? currentBranch(ws.path) : ''
@@ -42,11 +61,29 @@ export function registerIpc(): void {
     return res.canceled ? null : res.filePaths[0]
   })
 
+  // ---- Projects ----
+  ipcMain.handle('projects:list', () => getProjects())
+  ipcMain.handle('project:create', async (_e, repoPath: string, name?: string) => {
+    const project = await createProject(repoPath, name)
+    notifyProjectsChanged()
+    return project
+  })
+  ipcMain.handle('project:update', (_e, project: Project) => {
+    const saved = updateProject(project)
+    notifyProjectsChanged()
+    return saved
+  })
+  ipcMain.handle('project:delete', async (_e, id: string) => {
+    await deleteProject(id)
+    notifyProjectsChanged()
+    notifyWorkspacesChanged()
+  })
+
   // ---- Workspaces ----
   ipcMain.handle('workspaces:list', () => getWorkspaces())
 
-  ipcMain.handle('workspace:create', async (_e, name: string, baseBranch?: string) => {
-    const ws = await createWorkspace(name, baseBranch)
+  ipcMain.handle('workspace:create', async (_e, projectId: string, name: string, baseBranch?: string) => {
+    const ws = await createWorkspace(projectId, name, baseBranch)
     notifyWorkspacesChanged()
     // Run setup + start Claude in the background so the UI never blocks.
     void finishSetup(ws.id, notifyWorkspacesChanged)

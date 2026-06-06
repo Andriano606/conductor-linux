@@ -1,14 +1,15 @@
-import type { Settings, Workspace } from '../shared/types'
+import type { Project, Workspace } from '../shared/types'
 
 /**
  * Build the environment for scripts and the Claude session, exposing the same
- * CONDUCTOR_* variables that conductor.build provides.
+ * CONDUCTOR_* variables that conductor.build provides. CONDUCTOR_ROOT_PATH comes
+ * from the workspace's project (its repository).
  */
-export function buildEnv(ws: Workspace, settings: Settings): NodeJS.ProcessEnv {
+export function buildEnv(ws: Workspace, project: Project): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     CONDUCTOR_WORKSPACE_PATH: ws.path,
-    CONDUCTOR_ROOT_PATH: settings.repoPath,
+    CONDUCTOR_ROOT_PATH: project.repoPath,
     CONDUCTOR_WORKSPACE_NAME: ws.name,
     CONDUCTOR_PORT: String(ws.port)
   }

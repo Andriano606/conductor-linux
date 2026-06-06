@@ -1,5 +1,5 @@
 import { clipboard, contextBridge, ipcRenderer } from 'electron'
-import type { PtyData, PtyExit, PtyKind, Settings, Workspace } from '../shared/types'
+import type { Project, PtyData, PtyExit, PtyKind, Settings, Workspace } from '../shared/types'
 
 const api = {
   // Settings
@@ -10,13 +10,26 @@ const api = {
   pickFile: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickFile'),
   pickDir: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickDir'),
 
+  // Projects
+  listProjects: (): Promise<Project[]> => ipcRenderer.invoke('projects:list'),
+  createProject: (repoPath: string, name?: string): Promise<Project> =>
+    ipcRenderer.invoke('project:create', repoPath, name),
+  updateProject: (project: Project): Promise<Project | undefined> =>
+    ipcRenderer.invoke('project:update', project),
+  deleteProject: (id: string): Promise<void> => ipcRenderer.invoke('project:delete', id),
+  onProjectsChanged: (cb: (projects: Project[]) => void): (() => void) => {
+    const listener = (_e: unknown, projects: Project[]): void => cb(projects)
+    ipcRenderer.on('projects:changed', listener)
+    return () => ipcRenderer.removeListener('projects:changed', listener)
+  },
+
   // Workspaces
   listWorkspaces: (): Promise<Workspace[]> => ipcRenderer.invoke('workspaces:list'),
-  listBranches: (): Promise<{ branches: string[]; defaultBranch: string }> =>
-    ipcRenderer.invoke('git:branches'),
+  listBranches: (projectId: string): Promise<{ branches: string[]; defaultBranch: string }> =>
+    ipcRenderer.invoke('git:branches', projectId),
   currentBranch: (id: string): Promise<string> => ipcRenderer.invoke('git:currentBranch', id),
-  createWorkspace: (name: string, baseBranch?: string): Promise<Workspace> =>
-    ipcRenderer.invoke('workspace:create', name, baseBranch),
+  createWorkspace: (projectId: string, name: string, baseBranch?: string): Promise<Workspace> =>
+    ipcRenderer.invoke('workspace:create', projectId, name, baseBranch),
   runWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:run', id),
   stopWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:stop', id),
   openInBrowser: (id: string): Promise<void> => ipcRenderer.invoke('workspace:openInBrowser', id),
