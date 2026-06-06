@@ -23,7 +23,7 @@ import {
 import { buildEnv } from './env'
 import { runTask, startClaude, startShell, killWorkspace, stopTask } from './ptyManager'
 
-function slugify(name: string): string {
+export function slugify(name: string): string {
   return (
     name
       .trim()
