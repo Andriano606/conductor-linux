@@ -1,5 +1,13 @@
 import { clipboard, contextBridge, ipcRenderer } from 'electron'
-import type { Project, PtyData, PtyExit, PtyKind, Settings, Workspace } from '../shared/types'
+import type {
+  Project,
+  ProjectScripts,
+  PtyData,
+  PtyExit,
+  PtyKind,
+  Settings,
+  Workspace
+} from '../shared/types'
 
 const api = {
   // Settings
@@ -12,8 +20,8 @@ const api = {
 
   // Projects
   listProjects: (): Promise<Project[]> => ipcRenderer.invoke('projects:list'),
-  createProject: (repoPath: string, name?: string): Promise<Project> =>
-    ipcRenderer.invoke('project:create', repoPath, name),
+  createProject: (repoPath: string, scripts?: ProjectScripts): Promise<Project> =>
+    ipcRenderer.invoke('project:create', repoPath, scripts),
   updateProject: (project: Project): Promise<Project | undefined> =>
     ipcRenderer.invoke('project:update', project),
   deleteProject: (id: string): Promise<void> => ipcRenderer.invoke('project:delete', id),

@@ -115,9 +115,9 @@ describe('openNewProject / openNewWorkspace', () => {
 })
 
 describe('createProject', () => {
-  it('closes the modal on success', async () => {
-    await get().createProject('/repo')
-    expect(api.createProject).toHaveBeenCalledWith('/repo')
+  it('forwards repo path + scripts and closes the modal on success', async () => {
+    await get().createProject('/repo', { setupScript: '/s.sh' })
+    expect(api.createProject).toHaveBeenCalledWith('/repo', { setupScript: '/s.sh' })
     expect(get()).toMatchObject({ showNewProject: false, busy: false })
   })
   it('surfaces the error and clears busy on failure', async () => {

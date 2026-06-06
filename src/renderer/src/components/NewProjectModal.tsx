@@ -1,9 +1,26 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '../store'
 
+type ScriptField = 'setupScript' | 'runScript' | 'archiveScript'
+
+const SCRIPTS: { key: ScriptField; label: string; hint: string }[] = [
+  {
+    key: 'setupScript',
+    label: 'Setup-скрипт',
+    hint: 'Виконується автоматично при створенні воркспейсу.'
+  },
+  { key: 'runScript', label: 'Run-скрипт', hint: 'Виконується кнопкою Run. Доступний $CONDUCTOR_PORT.' },
+  { key: 'archiveScript', label: 'Archive-скрипт', hint: 'Виконується перед архівацією воркспейсу.' }
+]
+
 export function NewProjectModal(): JSX.Element {
   const { createProject, openNewProject, busy, error, clearError } = useStore()
   const [repoPath, setRepoPath] = useState('')
+  const [scripts, setScripts] = useState<Record<ScriptField, string>>({
+    setupScript: '',
+    runScript: '',
+    archiveScript: ''
+  })
   const [repoValid, setRepoValid] = useState<boolean | null>(null)
 
   useEffect(() => {
@@ -24,17 +41,23 @@ export function NewProjectModal(): JSX.Element {
     setRepoPath(p)
     clearError()
   }
+  const setScript = (key: ScriptField, value: string): void =>
+    setScripts((s) => ({ ...s, [key]: value }))
 
-  const browse = async (): Promise<void> => {
+  const browseDir = async (): Promise<void> => {
     const picked = await window.api.pickDir()
     if (picked) setPath(picked)
+  }
+  const browseScript = async (key: ScriptField): Promise<void> => {
+    const picked = await window.api.pickFile()
+    if (picked) setScript(key, picked)
   }
 
   const canSubmit = !busy && !!repoPath.trim() && repoValid === true
 
   // The project name is derived from the repo folder name on the main side.
   const submit = (): void => {
-    if (canSubmit) void createProject(repoPath.trim())
+    if (canSubmit) void createProject(repoPath.trim(), scripts)
   }
 
   return (
@@ -54,7 +77,7 @@ export function NewProjectModal(): JSX.Element {
               onChange={(e) => setPath(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && submit()}
             />
-            <button className="btn" disabled={busy} onClick={() => void browse()}>
+            <button className="btn" disabled={busy} onClick={() => void browseDir()}>
               Огляд…
             </button>
           </div>
@@ -65,6 +88,24 @@ export function NewProjectModal(): JSX.Element {
             {repoValid === true && <span className="ok"> — git-репозиторій знайдено.</span>}
           </div>
         </div>
+
+        {SCRIPTS.map((s) => (
+          <div className="field" key={s.key}>
+            <label>{s.label}</label>
+            <div className="row">
+              <input
+                value={scripts[s.key]}
+                disabled={busy}
+                placeholder="/шлях/до/скрипта.sh"
+                onChange={(e) => setScript(s.key, e.target.value)}
+              />
+              <button className="btn" disabled={busy} onClick={() => void browseScript(s.key)}>
+                Огляд…
+              </button>
+            </div>
+            <div className="hint">{s.hint}</div>
+          </div>
+        ))}
 
         {error && <div className="err">{error}</div>}
 

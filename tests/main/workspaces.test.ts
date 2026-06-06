@@ -70,6 +70,7 @@ import {
   deleteProject,
   finishArchive,
   finishSetup,
+  projectNameFromPath,
   restoreSessions,
   restoreWorktree,
   runWorkspace,
@@ -142,17 +143,30 @@ describe('createProject', () => {
     store._set({ ...settings }, [mkProject({ repoPath: '/repo' })], [])
     await expect(createProject('/repo')).rejects.toThrow(/already exists/)
   })
-  it('defaults the name to the repo folder and persists', async () => {
+  it('derives the name from the repo folder and persists', async () => {
     store._set({ ...settings }, [], [])
     const p = await createProject('/some/cool-app')
     expect(p.name).toBe('cool-app')
     expect(p.repoPath).toBe('/some/cool-app')
     expect(store.addProject).toHaveBeenCalledWith(p)
   })
-  it('honors an explicit name', async () => {
+  it('seeds the project scripts from the supplied object (trimmed)', async () => {
     store._set({ ...settings }, [], [])
-    const p = await createProject('/some/cool-app', 'My App')
-    expect(p.name).toBe('My App')
+    const p = await createProject('/some/cool-app', {
+      setupScript: ' /s.sh ',
+      runScript: '/r.sh',
+      archiveScript: ''
+    })
+    expect(p.setupScript).toBe('/s.sh')
+    expect(p.runScript).toBe('/r.sh')
+    expect(p.archiveScript).toBe('')
+  })
+})
+
+describe('projectNameFromPath', () => {
+  it('takes the last path segment, ignoring trailing slashes', () => {
+    expect(projectNameFromPath('/home/me/cool-app')).toBe('cool-app')
+    expect(projectNameFromPath('/home/me/cool-app/')).toBe('cool-app')
   })
 })
 

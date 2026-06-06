@@ -43,7 +43,7 @@ export function ProjectSettingsModal(): JSX.Element | null {
     if (picked) set(key, picked)
   }
 
-  const canSave = !!form.name.trim() && !!form.repoPath.trim() && repoValid !== false
+  const canSave = !!form.repoPath.trim() && repoValid !== false
 
   const remove = async (): Promise<void> => {
     if (
@@ -76,12 +76,7 @@ export function ProjectSettingsModal(): JSX.Element | null {
   return (
     <div className="modal-backdrop" onClick={() => openProjectSettings(null)}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Налаштування проекту</h2>
-
-        <div className="field">
-          <label>Назва проекту</label>
-          <input spellCheck={false} value={form.name} onChange={(e) => set('name', e.target.value)} />
-        </div>
+        <h2>Налаштування проекту · {form.name}</h2>
 
         <div className="field">
           <label>Репозиторій (git)</label>
@@ -97,7 +92,8 @@ export function ProjectSettingsModal(): JSX.Element | null {
             </button>
           </div>
           <div className="hint">
-            Головний git-репозиторій, з якого створюються worktree.
+            Головний git-репозиторій, з якого створюються worktree. Назва проекту береться з назви
+            теки.
             {repoValid === false && <span className="err"> — це не git-репозиторій.</span>}
             {repoValid === true && <span className="ok"> — git-репозиторій знайдено.</span>}
           </div>

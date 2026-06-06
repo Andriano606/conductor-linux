@@ -15,21 +15,27 @@ beforeEach(() => {
 })
 
 describe('ProjectSettingsModal', () => {
-  it('prefills the project fields', () => {
+  it('prefills the repo path and scripts (name shown in the heading, not editable)', () => {
     render(<ProjectSettingsModal />)
-    expect((screen.getByDisplayValue('proj') as HTMLInputElement).value).toBe('proj')
+    expect(screen.getByText(/Налаштування проекту · proj/)).toBeInTheDocument()
     expect(screen.getByDisplayValue('/repo')).toBeInTheDocument()
     expect(screen.getByDisplayValue('/s.sh')).toBeInTheDocument()
   })
 
-  it('saves an edited name and script via updateProject', async () => {
+  it('has no editable project-name field', () => {
+    render(<ProjectSettingsModal />)
+    // The only value matching the name should be the (non-input) heading text.
+    expect(screen.queryByDisplayValue('proj')).not.toBeInTheDocument()
+  })
+
+  it('saves an edited script via updateProject', async () => {
     api.isGitRepo.mockResolvedValue(true)
     render(<ProjectSettingsModal />)
-    fireEvent.change(screen.getByDisplayValue('proj'), { target: { value: 'renamed' } })
+    fireEvent.change(screen.getByDisplayValue('/s.sh'), { target: { value: '/setup2.sh' } })
     await waitFor(() => expect(screen.getByText('Зберегти')).not.toBeDisabled())
     fireEvent.click(screen.getByText('Зберегти'))
     expect(api.updateProject).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'p1', name: 'renamed', setupScript: '/s.sh' })
+      expect.objectContaining({ id: 'p1', repoPath: '/repo', setupScript: '/setup2.sh' })
     )
   })
 

@@ -35,6 +35,13 @@ export interface Project {
   createdAt: number
 }
 
+/** The scripts a project carries; supplied at create time or edited later. */
+export interface ProjectScripts {
+  setupScript?: string
+  runScript?: string
+  archiveScript?: string
+}
+
 export type WorkspaceStatus = 'setting_up' | 'active' | 'archiving' | 'archived'
 
 export interface Workspace {

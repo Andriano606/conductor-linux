@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto'
 import { existsSync, mkdirSync } from 'fs'
 import { basename, join } from 'path'
-import type { Project, Workspace } from '../shared/types'
+import type { Project, ProjectScripts, Workspace } from '../shared/types'
 import {
   addProject,
   addWorkspace,
@@ -39,11 +39,20 @@ export function slugify(name: string): string {
 
 // ── Projects ──────────────────────────────────────────────────────────────────
 
+/** Project display name is always derived from the repo folder name. */
+export function projectNameFromPath(repoPath: string): string {
+  return basename(repoPath.replace(/[/\\]+$/, '')) || 'project'
+}
+
 /**
  * Register a git repository as a project. Validates the path is a git repo and
- * isn't already registered, then persists it. Workspaces are created under it.
+ * isn't already registered, then persists it. The name comes from the repo
+ * folder; the optional scripts seed the project's setup/run/archive scripts.
  */
-export async function createProject(repoPath: string, name?: string): Promise<Project> {
+export async function createProject(
+  repoPath: string,
+  scripts?: ProjectScripts
+): Promise<Project> {
   const path = repoPath.trim()
   if (!path) throw new Error('Project path is required.')
   if (!(await isGitRepo(path))) {
@@ -54,11 +63,11 @@ export async function createProject(repoPath: string, name?: string): Promise<Pr
   }
   const project: Project = {
     id: randomUUID(),
-    name: name?.trim() || basename(path) || 'project',
+    name: projectNameFromPath(path),
     repoPath: path,
-    setupScript: '',
-    runScript: '',
-    archiveScript: '',
+    setupScript: scripts?.setupScript?.trim() || '',
+    runScript: scripts?.runScript?.trim() || '',
+    archiveScript: scripts?.archiveScript?.trim() || '',
     createdAt: Date.now()
   }
   addProject(project)

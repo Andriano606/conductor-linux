@@ -1,7 +1,7 @@
 import { spawn } from 'child_process'
 import { BrowserWindow, Menu, clipboard, dialog, ipcMain, shell } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
-import type { Project, PtyKind, Settings } from '../shared/types'
+import type { Project, ProjectScripts, PtyKind, Settings } from '../shared/types'
 import {
   getProject,
   getProjects,
@@ -22,6 +22,7 @@ import {
   ensureShell,
   finishArchive,
   finishSetup,
+  projectNameFromPath,
   restoreWorktree,
   runWorkspace
 } from './workspaces'
@@ -63,13 +64,14 @@ export function registerIpc(): void {
 
   // ---- Projects ----
   ipcMain.handle('projects:list', () => getProjects())
-  ipcMain.handle('project:create', async (_e, repoPath: string, name?: string) => {
-    const project = await createProject(repoPath, name)
+  ipcMain.handle('project:create', async (_e, repoPath: string, scripts?: ProjectScripts) => {
+    const project = await createProject(repoPath, scripts)
     notifyProjectsChanged()
     return project
   })
   ipcMain.handle('project:update', (_e, project: Project) => {
-    const saved = updateProject(project)
+    // The name always tracks the repo folder, never hand-edited.
+    const saved = updateProject({ ...project, name: projectNameFromPath(project.repoPath) })
     notifyProjectsChanged()
     return saved
   })

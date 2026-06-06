@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Project, PtyKind, Settings, Workspace } from '@shared/types'
+import type { Project, ProjectScripts, PtyKind, Settings, Workspace } from '@shared/types'
 
 interface AppState {
   settings: Settings | null
@@ -35,7 +35,7 @@ interface AppState {
   openProjectSettings: (id: string | null) => void
   openArchived: (open: boolean) => void
   saveSettings: (s: Settings) => Promise<void>
-  createProject: (repoPath: string) => Promise<void>
+  createProject: (repoPath: string, scripts?: ProjectScripts) => Promise<void>
   saveProject: (project: Project) => Promise<void>
   deleteProject: (id: string) => Promise<void>
   createWorkspace: (projectId: string, name: string, baseBranch?: string) => Promise<void>
@@ -106,11 +106,11 @@ export const useStore = create<AppState>((set, get) => ({
     set({ settings: saved, showSettings: false })
   },
 
-  createProject: async (repoPath) => {
+  createProject: async (repoPath, scripts) => {
     set({ busy: true, error: null })
     try {
       // The project name is derived from the repo folder name on the main side.
-      await window.api.createProject(repoPath)
+      await window.api.createProject(repoPath, scripts)
       set({ showNewProject: false })
     } catch (e) {
       set({ error: (e as Error).message })
