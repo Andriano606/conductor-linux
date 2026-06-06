@@ -8,6 +8,7 @@ interface AppState {
   activeKind: PtyKind
   showSettings: boolean
   showNew: boolean
+  showArchived: boolean
   busy: boolean
   error: string | null
   /** Whether a run script is currently active, per workspace id. */
@@ -18,6 +19,7 @@ interface AppState {
   setKind: (kind: PtyKind) => void
   openSettings: (open: boolean) => void
   openNew: (open: boolean) => void
+  openArchived: (open: boolean) => void
   saveSettings: (s: Settings) => Promise<void>
   createWorkspace: (name: string) => Promise<void>
   runActive: () => Promise<void>
@@ -25,6 +27,8 @@ interface AppState {
   openActiveInBrowser: () => void
   openActiveInIde: () => void
   archiveActive: () => Promise<void>
+  restoreWorkspace: (id: string) => Promise<void>
+  deleteWorkspace: (id: string) => Promise<void>
   setRunning: (id: string, running: boolean) => void
   setWorkspaces: (ws: Workspace[]) => void
   clearError: () => void
@@ -37,6 +41,7 @@ export const useStore = create<AppState>((set, get) => ({
   activeKind: 'claude',
   showSettings: false,
   showNew: false,
+  showArchived: false,
   busy: false,
   error: null,
   runningById: {},
@@ -47,7 +52,8 @@ export const useStore = create<AppState>((set, get) => ({
       window.api.listWorkspaces()
     ])
     set({ settings, workspaces })
-    if (!get().activeId && workspaces.length > 0) set({ activeId: workspaces[0].id })
+    const live = workspaces.filter((w) => w.status !== 'archived')
+    if (!get().activeId && live.length > 0) set({ activeId: live[0].id })
     // Force settings open on first run when nothing is configured.
     if (!settings.repoPath) set({ showSettings: true })
   },
@@ -56,6 +62,7 @@ export const useStore = create<AppState>((set, get) => ({
   setKind: (kind) => set({ activeKind: kind }),
   openSettings: (open) => set({ showSettings: open }),
   openNew: (open) => set({ showNew: open }),
+  openArchived: (open) => set({ showArchived: open }),
 
   saveSettings: async (s) => {
     const saved = await window.api.setSettings(s)
@@ -118,6 +125,26 @@ export const useStore = create<AppState>((set, get) => ({
     set({ error: null, activeKind: 'task' })
     try {
       await window.api.archiveWorkspace(id)
+    } catch (e) {
+      set({ error: (e as Error).message })
+    }
+  },
+
+  restoreWorkspace: async (id) => {
+    set({ error: null })
+    try {
+      await window.api.restoreWorkspace(id)
+      // Re-created workspace becomes active so the user watches setup run.
+      set({ activeId: id, activeKind: 'task', showArchived: false })
+    } catch (e) {
+      set({ error: (e as Error).message })
+    }
+  },
+
+  deleteWorkspace: async (id) => {
+    set({ error: null })
+    try {
+      await window.api.deleteWorkspace(id)
     } catch (e) {
       set({ error: (e as Error).message })
     }

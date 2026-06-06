@@ -42,7 +42,25 @@ function ensure(id: string, kind: PtyKind): TermEntry {
   term.loadAddon(fit)
   term.open(wrapper)
 
-  if (!readOnly) term.onData((d) => window.api.sendInput(id, kind, d))
+  if (!readOnly) {
+    term.onData((d) => window.api.sendInput(id, kind, d))
+  } else {
+    // View-only terminal (task output): let the user select & copy text, but
+    // never send keystrokes to the PTY so the running process is untouched.
+    // Selecting with the mouse copies automatically; Ctrl/Cmd+C also copies.
+    const copySelection = (): void => {
+      const sel = term.getSelection()
+      if (sel) window.api.copyText(sel)
+    }
+    term.onSelectionChange(copySelection)
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+        copySelection()
+      }
+      // Swallow every key: nothing reaches stdin, so the process is unaffected.
+      return false
+    })
+  }
 
   e = { wrapper, term, fit }
   terms.set(k, e)

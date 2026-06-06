@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { clipboard, contextBridge, ipcRenderer } from 'electron'
 import type { PtyData, PtyExit, PtyKind, Settings, Workspace } from '../shared/types'
 
 const api = {
@@ -6,6 +6,7 @@ const api = {
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('settings:get'),
   setSettings: (s: Settings): Promise<Settings> => ipcRenderer.invoke('settings:set', s),
   isGitRepo: (path: string): Promise<boolean> => ipcRenderer.invoke('settings:isGitRepo', path),
+  copyText: (text: string): void => clipboard.writeText(text),
   pickFile: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickFile'),
   pickDir: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickDir'),
 
@@ -18,6 +19,8 @@ const api = {
   openInBrowser: (id: string): Promise<void> => ipcRenderer.invoke('workspace:openInBrowser', id),
   openInIde: (id: string): Promise<void> => ipcRenderer.invoke('workspace:openInIde', id),
   archiveWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:archive', id),
+  restoreWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:restore', id),
+  deleteWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:delete', id),
   onTaskRunning: (cb: (d: { id: string; running: boolean }) => void): (() => void) => {
     const listener = (_e: unknown, d: { id: string; running: boolean }): void => cb(d)
     ipcRenderer.on('task:running', listener)

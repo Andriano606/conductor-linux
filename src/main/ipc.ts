@@ -4,7 +4,15 @@ import type { PtyKind, Settings } from '../shared/types'
 import { getSettings, getWorkspace, getWorkspaces, setSettings } from './store'
 import { isGitRepo } from './git'
 import { attach, resize, stopTask, write } from './ptyManager'
-import { beginArchive, createWorkspace, finishArchive, finishSetup, runWorkspace } from './workspaces'
+import {
+  beginArchive,
+  createWorkspace,
+  deleteArchivedWorkspace,
+  finishArchive,
+  finishSetup,
+  restoreWorktree,
+  runWorkspace
+} from './workspaces'
 
 function notifyWorkspacesChanged(): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -71,6 +79,19 @@ export function registerIpc(): void {
     beginArchive(id)
     notifyWorkspacesChanged()
     void finishArchive(id, notifyWorkspacesChanged)
+  })
+
+  ipcMain.handle('workspace:restore', async (_e, id: string) => {
+    // Re-create the worktree (may throw on git errors), then run setup + Claude
+    // in the background so the UI never blocks.
+    await restoreWorktree(id)
+    notifyWorkspacesChanged()
+    void finishSetup(id, notifyWorkspacesChanged)
+  })
+
+  ipcMain.handle('workspace:delete', async (_e, id: string) => {
+    await deleteArchivedWorkspace(id)
+    notifyWorkspacesChanged()
   })
 
   // ---- PTY ----

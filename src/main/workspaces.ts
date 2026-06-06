@@ -11,9 +11,17 @@ import {
   removeWorkspace,
   updateWorkspaceStatus
 } from './store'
-import { branchExists, isGitRepo, worktreeAdd, worktreeRemove } from './git'
+import {
+  branchDelete,
+  branchExists,
+  isGitRepo,
+  worktreeAdd,
+  worktreeAddExisting,
+  worktreePrune,
+  worktreeRemove
+} from './git'
 import { buildEnv } from './env'
-import { runTask, startClaude, killWorkspace } from './ptyManager'
+import { runTask, startClaude, killWorkspace, stopTask } from './ptyManager'
 
 function slugify(name: string): string {
   return (
@@ -136,7 +144,11 @@ export async function runWorkspace(id: string): Promise<void> {
 
 /** Mark a workspace as archiving so the UI updates immediately (non-blocking). */
 export function beginArchive(id: string): void {
-  if (getWorkspace(id)) updateWorkspaceStatus(id, 'archiving')
+  if (!getWorkspace(id)) return
+  // Stop the running app (run server) right away if it's up, so its port frees
+  // and the archive script runs against a stopped app.
+  stopTask(id)
+  updateWorkspaceStatus(id, 'archiving')
 }
 
 /**
@@ -163,10 +175,68 @@ export async function finishArchive(id: string, onChange: () => void): Promise<v
     killWorkspace(ws.id)
     await worktreeRemove(settings.repoPath, ws.path)
   } catch (err) {
-    // Surface the error but still drop the workspace so the UI stays consistent.
+    // Surface the error but still archive the workspace so the UI stays consistent.
     console.error('archive failed:', err)
   } finally {
-    removeWorkspace(ws.id)
+    // Keep the workspace (and its git branch) so it can be restored later; the
+    // worktree directory is gone but the branch lingers.
+    updateWorkspaceStatus(ws.id, 'archived')
     onChange()
   }
+}
+
+/**
+ * Re-create the worktree for an archived workspace on its existing branch and
+ * flip it to 'setting_up'. The setup script + Claude session are started
+ * afterwards via finishSetup(). Throws if the repo is missing.
+ */
+export async function restoreWorktree(id: string): Promise<void> {
+  const settings = getSettings()
+  const ws = getWorkspace(id)
+  if (!ws) throw new Error('Workspace not found')
+  if (!(await isGitRepo(settings.repoPath))) {
+    throw new Error('Repository path is not a git repository. Set it in Settings.')
+  }
+  // Clean any stale worktree refs / leftover directory before re-adding.
+  await worktreePrune(settings.repoPath)
+  if (existsSync(ws.path)) {
+    try {
+      await worktreeRemove(settings.repoPath, ws.path)
+    } catch {
+      /* ignore — git will error on add if the path is truly unusable */
+    }
+  }
+  if (await branchExists(settings.repoPath, ws.branch)) {
+    await worktreeAddExisting(settings.repoPath, ws.path, ws.branch)
+  } else {
+    // Branch was deleted out-of-band; recreate it fresh.
+    await worktreeAdd(settings.repoPath, ws.path, ws.branch)
+  }
+  updateWorkspaceStatus(id, 'setting_up')
+}
+
+/**
+ * Permanently delete an archived workspace: kill PTYs, remove any leftover
+ * worktree, delete the git branch and drop it from the store.
+ */
+export async function deleteArchivedWorkspace(id: string): Promise<void> {
+  const settings = getSettings()
+  const ws = getWorkspace(id)
+  if (!ws) return
+  killWorkspace(ws.id)
+  if (existsSync(ws.path)) {
+    try {
+      await worktreeRemove(settings.repoPath, ws.path)
+    } catch {
+      /* ignore */
+    }
+  }
+  try {
+    await worktreePrune(settings.repoPath)
+    await branchDelete(settings.repoPath, ws.branch)
+  } catch (err) {
+    // Branch may already be gone; deletion of the workspace should still proceed.
+    console.error('delete branch failed:', err)
+  }
+  removeWorkspace(ws.id)
 }

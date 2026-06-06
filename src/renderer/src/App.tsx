@@ -5,11 +5,21 @@ import { Toolbar } from './components/Toolbar'
 import { TerminalView } from './components/TerminalView'
 import { SettingsModal } from './components/SettingsModal'
 import { NewWorkspaceModal } from './components/NewWorkspaceModal'
+import { ArchivedModal } from './components/ArchivedModal'
 import { disposeWorkspace, writeData } from './termRegistry'
 
 export function App(): JSX.Element {
-  const { workspaces, activeId, activeKind, showSettings, showNew, load, setWorkspaces, setRunning } =
-    useStore()
+  const {
+    workspaces,
+    activeId,
+    activeKind,
+    showSettings,
+    showNew,
+    showArchived,
+    load,
+    setWorkspaces,
+    setRunning
+  } = useStore()
 
   useEffect(() => {
     void load()
@@ -19,10 +29,11 @@ export function App(): JSX.Element {
     const offChanged = window.api.onWorkspacesChanged((next) => {
       const state = useStore.getState()
       const prev = state.workspaces
-      // Tear down terminals for workspaces that disappeared (archived).
-      const ids = new Set(next.map((w) => w.id))
+      // Tear down terminals for workspaces that disappeared (deleted) or were
+      // just archived — their PTYs are killed in main either way.
+      const liveNextIds = new Set(next.filter((w) => w.status !== 'archived').map((w) => w.id))
       for (const w of prev) {
-        if (!ids.has(w.id)) disposeWorkspace(w.id)
+        if (w.status !== 'archived' && !liveNextIds.has(w.id)) disposeWorkspace(w.id)
       }
       // When the active workspace finishes setup, reveal its Claude session.
       const before = prev.find((w) => w.id === state.activeId)
@@ -31,9 +42,10 @@ export function App(): JSX.Element {
         state.setKind('claude')
       }
       setWorkspaces(next)
-      // The active workspace was archived/removed — switch to another (or none).
-      if (state.activeId && !after) {
-        if (next.length) state.setActive(next[0].id)
+      // The active workspace was archived/deleted — switch to another live one.
+      const live = next.filter((w) => w.status !== 'archived')
+      if (state.activeId && !live.some((w) => w.id === state.activeId)) {
+        if (live.length) state.setActive(live[0].id)
         else useStore.setState({ activeId: null })
       }
     })
@@ -65,6 +77,7 @@ export function App(): JSX.Element {
       </div>
       {showSettings && <SettingsModal />}
       {showNew && <NewWorkspaceModal />}
+      {showArchived && <ArchivedModal />}
     </div>
   )
 }

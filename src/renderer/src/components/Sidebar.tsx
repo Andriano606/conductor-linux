@@ -1,7 +1,9 @@
 import { useStore } from '../store'
 
 export function Sidebar(): JSX.Element {
-  const { workspaces, activeId, setActive, openNew, openSettings } = useStore()
+  const { workspaces, activeId, setActive, openNew, openSettings, openArchived } = useStore()
+  const live = workspaces.filter((w) => w.status !== 'archived')
+  const archivedCount = workspaces.length - live.length
 
   return (
     <div className="sidebar">
@@ -15,13 +17,13 @@ export function Sidebar(): JSX.Element {
         + Новий воркспейс
       </button>
       <div className="ws-list">
-        {workspaces.length === 0 ? (
+        {live.length === 0 ? (
           <div className="empty-hint">
             Немає воркспейсів. Натисни «+ Новий воркспейс», щоб створити git worktree та запустити
             сесію Claude.
           </div>
         ) : (
-          workspaces.map((w) => (
+          live.map((w) => (
             <div
               key={w.id}
               className={`ws-item ${w.id === activeId ? 'active' : ''}`}
@@ -39,6 +41,9 @@ export function Sidebar(): JSX.Element {
           ))
         )}
       </div>
+      <button className="archived-btn" onClick={() => openArchived(true)}>
+        🗄 Архів{archivedCount > 0 ? ` (${archivedCount})` : ''}
+      </button>
     </div>
   )
 }

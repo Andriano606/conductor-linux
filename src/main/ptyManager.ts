@@ -33,6 +33,24 @@ function ensure(id: string, kind: PtyKind): Entry {
   return e
 }
 
+/**
+ * Kill a proc together with its whole child process group, so a server the run
+ * script started (e.g. `npm run dev`) dies too — node-pty's own kill only
+ * signals the shell, leaving grandchildren (and the bound port) alive. node-pty
+ * spawns each proc as a session leader, so its pid is the group id (-pid).
+ */
+function killProc(proc: pty.IPty): void {
+  try {
+    process.kill(-proc.pid, 'SIGTERM')
+  } catch {
+    try {
+      proc.kill()
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
 function wire(id: string, kind: PtyKind, e: Entry, proc: pty.IPty): void {
   proc.onData((d) => {
     e.buffer += d
@@ -93,13 +111,7 @@ export function runTask(opts: {
   track?: boolean
 }): Promise<number> {
   const e = ensure(opts.id, 'task')
-  if (e.proc) {
-    try {
-      e.proc.kill()
-    } catch {
-      /* ignore */
-    }
-  }
+  if (e.proc) killProc(e.proc)
   const q = JSON.stringify
   const cmd = `printf '\\n\\033[1;36m▶ %s\\033[0m\\n' ${q(opts.label)}; bash ${q(opts.scriptPath)}; code=$?; printf '\\033[1;36m[%s exited %s]\\033[0m\\n' ${q(opts.label)} "$code"; exit $code`
   const proc = pty.spawn('/bin/bash', ['-lc', cmd], {
@@ -123,13 +135,7 @@ export function runTask(opts: {
 /** Stop the running task proc (the run server) for a workspace. */
 export function stopTask(id: string): void {
   const e = entries.get(key(id, 'task'))
-  if (e?.proc) {
-    try {
-      e.proc.kill()
-    } catch {
-      /* ignore */
-    }
-  }
+  if (e?.proc) killProc(e.proc)
 }
 
 export function write(id: string, kind: PtyKind, data: string): void {
@@ -157,26 +163,14 @@ export function killWorkspace(id: string): void {
   for (const kind of ['claude', 'task'] as PtyKind[]) {
     const k = key(id, kind)
     const e = entries.get(k)
-    if (e?.proc) {
-      try {
-        e.proc.kill()
-      } catch {
-        /* ignore */
-      }
-    }
+    if (e?.proc) killProc(e.proc)
     entries.delete(k)
   }
 }
 
 export function killAll(): void {
   for (const [, e] of entries) {
-    if (e.proc) {
-      try {
-        e.proc.kill()
-      } catch {
-        /* ignore */
-      }
-    }
+    if (e.proc) killProc(e.proc)
   }
   entries.clear()
 }
