@@ -12,4 +12,5 @@ linux:
     - AppImage
     - deb
   category: Development
+  icon: build/icon.png
 npmRebuild: true
