@@ -13,6 +13,8 @@ interface AppState {
   error: string | null
   /** Whether a run script is currently active, per workspace id. */
   runningById: Record<string, boolean>
+  /** Last-selected tab per workspace id, so switching workspaces keeps the tab. */
+  kindById: Record<string, PtyKind>
 
   load: () => Promise<void>
   setActive: (id: string) => void
@@ -21,7 +23,7 @@ interface AppState {
   openNew: (open: boolean) => void
   openArchived: (open: boolean) => void
   saveSettings: (s: Settings) => Promise<void>
-  createWorkspace: (name: string) => Promise<void>
+  createWorkspace: (name: string, baseBranch?: string) => Promise<void>
   runActive: () => Promise<void>
   stopActive: () => Promise<void>
   openActiveInBrowser: () => void
@@ -45,6 +47,7 @@ export const useStore = create<AppState>((set, get) => ({
   busy: false,
   error: null,
   runningById: {},
+  kindById: {},
 
   load: async () => {
     const [settings, workspaces] = await Promise.all([
@@ -58,8 +61,14 @@ export const useStore = create<AppState>((set, get) => ({
     if (!settings.repoPath) set({ showSettings: true })
   },
 
-  setActive: (id) => set({ activeId: id, activeKind: 'claude' }),
-  setKind: (kind) => set({ activeKind: kind }),
+  // Restore the tab this workspace was last on (default Claude).
+  setActive: (id) => set((s) => ({ activeId: id, activeKind: s.kindById[id] ?? 'claude' })),
+  // Remember the chosen tab for the active workspace.
+  setKind: (kind) =>
+    set((s) => ({
+      activeKind: kind,
+      kindById: s.activeId ? { ...s.kindById, [s.activeId]: kind } : s.kindById
+    })),
   openSettings: (open) => set({ showSettings: open }),
   openNew: (open) => set({ showNew: open }),
   openArchived: (open) => set({ showArchived: open }),
@@ -69,12 +78,17 @@ export const useStore = create<AppState>((set, get) => ({
     set({ settings: saved, showSettings: false })
   },
 
-  createWorkspace: async (name) => {
+  createWorkspace: async (name, baseBranch) => {
     set({ busy: true, error: null })
     try {
-      const ws = await window.api.createWorkspace(name)
+      const ws = await window.api.createWorkspace(name, baseBranch)
       // Show the "Скрипти" tab so the user can watch setup stream in the background.
-      set({ showNew: false, activeId: ws.id, activeKind: 'task' })
+      set((s) => ({
+        showNew: false,
+        activeId: ws.id,
+        activeKind: 'task',
+        kindById: { ...s.kindById, [ws.id]: 'task' }
+      }))
     } catch (e) {
       set({ error: (e as Error).message })
     } finally {
@@ -86,7 +100,12 @@ export const useStore = create<AppState>((set, get) => ({
     const id = get().activeId
     if (!id) return
     // Optimistically flip to Stop; main confirms via the task:running event.
-    set((s) => ({ error: null, activeKind: 'task', runningById: { ...s.runningById, [id]: true } }))
+    set((s) => ({
+      error: null,
+      activeKind: 'task',
+      runningById: { ...s.runningById, [id]: true },
+      kindById: { ...s.kindById, [id]: 'task' }
+    }))
     try {
       await window.api.runWorkspace(id)
     } catch (e) {
@@ -122,7 +141,7 @@ export const useStore = create<AppState>((set, get) => ({
     if (!id) return
     // Non-blocking: show the archive output; the workspace drops out of the list
     // (and the active one switches) via the workspaces:changed event when done.
-    set({ error: null, activeKind: 'task' })
+    set((s) => ({ error: null, activeKind: 'task', kindById: { ...s.kindById, [id]: 'task' } }))
     try {
       await window.api.archiveWorkspace(id)
     } catch (e) {
@@ -135,7 +154,12 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       await window.api.restoreWorkspace(id)
       // Re-created workspace becomes active so the user watches setup run.
-      set({ activeId: id, activeKind: 'task', showArchived: false })
+      set((s) => ({
+        activeId: id,
+        activeKind: 'task',
+        showArchived: false,
+        kindById: { ...s.kindById, [id]: 'task' }
+      }))
     } catch (e) {
       set({ error: (e as Error).message })
     }

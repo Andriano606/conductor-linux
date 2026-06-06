@@ -12,8 +12,11 @@ const api = {
 
   // Workspaces
   listWorkspaces: (): Promise<Workspace[]> => ipcRenderer.invoke('workspaces:list'),
-  createWorkspace: (name: string): Promise<Workspace> =>
-    ipcRenderer.invoke('workspace:create', name),
+  listBranches: (): Promise<{ branches: string[]; defaultBranch: string }> =>
+    ipcRenderer.invoke('git:branches'),
+  currentBranch: (id: string): Promise<string> => ipcRenderer.invoke('git:currentBranch', id),
+  createWorkspace: (name: string, baseBranch?: string): Promise<Workspace> =>
+    ipcRenderer.invoke('workspace:create', name, baseBranch),
   runWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:run', id),
   stopWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:stop', id),
   openInBrowser: (id: string): Promise<void> => ipcRenderer.invoke('workspace:openInBrowser', id),
@@ -39,6 +42,8 @@ const api = {
     ipcRenderer.send('pty:input', id, kind, data),
   resizePty: (id: string, kind: PtyKind, cols: number, rows: number): void =>
     ipcRenderer.send('pty:resize', id, kind, cols, rows),
+  showTermMenu: (id: string, kind: PtyKind, selection: string): void =>
+    ipcRenderer.send('term:menu', id, kind, selection),
   onPtyData: (cb: (d: PtyData) => void): (() => void) => {
     const listener = (_e: unknown, d: PtyData): void => cb(d)
     ipcRenderer.on('pty:data', listener)

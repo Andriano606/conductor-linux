@@ -21,7 +21,7 @@ import {
   worktreeRemove
 } from './git'
 import { buildEnv } from './env'
-import { runTask, startClaude, killWorkspace, stopTask } from './ptyManager'
+import { runTask, startClaude, startShell, killWorkspace, stopTask } from './ptyManager'
 
 function slugify(name: string): string {
   return (
@@ -38,40 +38,47 @@ function slugify(name: string): string {
  * immediately with status 'setting_up' so the UI does not block. The setup
  * script and Claude session are started afterwards via finishSetup().
  */
-export async function createWorkspace(name: string): Promise<Workspace> {
+export async function createWorkspace(name: string, baseBranch?: string): Promise<Workspace> {
   const settings = getSettings()
   if (!(await isGitRepo(settings.repoPath))) {
     throw new Error('Repository path is not a git repository. Set it in Settings.')
   }
 
-  const slug = slugify(name)
+  // One field is both the display name and the full branch name (no forced prefix).
+  const branchName = name.trim()
+  if (!branchName) throw new Error('Name is required.')
+  // No other workspace (active or archived) may already use this name/branch.
+  if (getWorkspaces().some((w) => w.name === branchName || w.branch === branchName)) {
+    throw new Error(`A workspace named "${branchName}" already exists.`)
+  }
+  // The git branch must not already exist — `git worktree add -b` would fail.
+  if (await branchExists(settings.repoPath, branchName)) {
+    throw new Error(`Branch "${branchName}" already exists. Choose another name.`)
+  }
+
+  // The worktree directory is derived from a filesystem-safe slug and
+  // deduplicated against app state and disk so checkouts never collide.
+  const slug = slugify(branchName)
   const taken = new Set(getWorkspaces().map((w) => w.path))
-  // Find a name free in app state, on disk, and in git (a branch may linger
-  // from an archived workspace, since archive keeps the branch).
   let candidate = slug
   let wtPath = join(settings.worktreesDir, candidate)
-  let branch = `conductor/${candidate}`
   let suffix = 2
-  while (
-    taken.has(wtPath) ||
-    existsSync(wtPath) ||
-    (await branchExists(settings.repoPath, branch))
-  ) {
+  while (taken.has(wtPath) || existsSync(wtPath)) {
     candidate = `${slug}-${suffix}`
     wtPath = join(settings.worktreesDir, candidate)
-    branch = `conductor/${candidate}`
     suffix++
   }
 
   mkdirSync(settings.worktreesDir, { recursive: true })
-  await worktreeAdd(settings.repoPath, wtPath, branch)
+  await worktreeAdd(settings.repoPath, wtPath, branchName, baseBranch)
 
   const ws: Workspace = {
     id: randomUUID(),
-    // Use the deduplicated slug so the name matches the real worktree dir/branch
-    // (e.g. "porto-2" when "porto" was taken), not the raw input.
-    name: candidate,
-    branch,
+    // Name and branch are the same user-chosen value; the worktree dir uses the
+    // slugified, deduped form on disk.
+    name: branchName,
+    branch: branchName,
+    baseBranch: baseBranch?.trim() || undefined,
     path: wtPath,
     port: nextPort(),
     createdAt: Date.now(),
@@ -122,6 +129,17 @@ export function restoreSessions(): void {
     if (!existsSync(ws.path)) continue
     startClaude({ id: ws.id, cwd: ws.path, env: buildEnv(ws, settings), cols: 80, rows: 24 })
   }
+}
+
+/**
+ * Ensure a free interactive shell is running for the workspace (idempotent).
+ * Called when the user opens the Terminal tab; restarts it if it had exited.
+ */
+export function ensureShell(id: string): void {
+  const settings = getSettings()
+  const ws = getWorkspace(id)
+  if (!ws) return
+  startShell({ id: ws.id, cwd: ws.path, env: buildEnv(ws, settings), cols: 80, rows: 24 })
 }
 
 /** Run the configured run script in the workspace (does not wait for it). */

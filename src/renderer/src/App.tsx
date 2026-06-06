@@ -35,12 +35,8 @@ export function App(): JSX.Element {
       for (const w of prev) {
         if (w.status !== 'archived' && !liveNextIds.has(w.id)) disposeWorkspace(w.id)
       }
-      // When the active workspace finishes setup, reveal its Claude session.
-      const before = prev.find((w) => w.id === state.activeId)
-      const after = next.find((w) => w.id === state.activeId)
-      if (before?.status === 'setting_up' && after?.status === 'active' && state.activeKind === 'task') {
-        state.setKind('claude')
-      }
+      // Note: we intentionally do NOT switch tabs when setup finishes — the user
+      // stays on whatever tab they're currently viewing.
       setWorkspaces(next)
       // The active workspace was archived/deleted — switch to another live one.
       const live = next.filter((w) => w.status !== 'archived')

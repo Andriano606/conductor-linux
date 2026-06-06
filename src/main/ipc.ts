@@ -1,13 +1,15 @@
 import { spawn } from 'child_process'
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { BrowserWindow, Menu, clipboard, dialog, ipcMain, shell } from 'electron'
+import type { MenuItemConstructorOptions } from 'electron'
 import type { PtyKind, Settings } from '../shared/types'
 import { getSettings, getWorkspace, getWorkspaces, setSettings } from './store'
-import { isGitRepo } from './git'
+import { currentBranch, isGitRepo, listBranches } from './git'
 import { attach, resize, stopTask, write } from './ptyManager'
 import {
   beginArchive,
   createWorkspace,
   deleteArchivedWorkspace,
+  ensureShell,
   finishArchive,
   finishSetup,
   restoreWorktree,
@@ -25,6 +27,11 @@ export function registerIpc(): void {
   ipcMain.handle('settings:get', () => getSettings())
   ipcMain.handle('settings:set', (_e, settings: Settings) => setSettings(settings))
   ipcMain.handle('settings:isGitRepo', (_e, path: string) => isGitRepo(path))
+  ipcMain.handle('git:branches', () => listBranches(getSettings().repoPath))
+  ipcMain.handle('git:currentBranch', (_e, id: string) => {
+    const ws = getWorkspaces().find((w) => w.id === id)
+    return ws ? currentBranch(ws.path) : ''
+  })
 
   ipcMain.handle('dialog:pickFile', async () => {
     const res = await dialog.showOpenDialog({ properties: ['openFile'] })
@@ -38,8 +45,8 @@ export function registerIpc(): void {
   // ---- Workspaces ----
   ipcMain.handle('workspaces:list', () => getWorkspaces())
 
-  ipcMain.handle('workspace:create', async (_e, name: string) => {
-    const ws = await createWorkspace(name)
+  ipcMain.handle('workspace:create', async (_e, name: string, baseBranch?: string) => {
+    const ws = await createWorkspace(name, baseBranch)
     notifyWorkspacesChanged()
     // Run setup + start Claude in the background so the UI never blocks.
     void finishSetup(ws.id, notifyWorkspacesChanged)
@@ -95,9 +102,39 @@ export function registerIpc(): void {
   })
 
   // ---- PTY ----
-  ipcMain.handle('pty:attach', (_e, id: string, kind: PtyKind) => attach(id, kind))
+  ipcMain.handle('pty:attach', (_e, id: string, kind: PtyKind) => {
+    // The free shell is started lazily (and restarted if it had exited) the
+    // moment its tab is attached — no script/setup needs to have run.
+    if (kind === 'shell') ensureShell(id)
+    return attach(id, kind)
+  })
   ipcMain.on('pty:input', (_e, id: string, kind: PtyKind, data: string) => write(id, kind, data))
   ipcMain.on('pty:resize', (_e, id: string, kind: PtyKind, cols: number, rows: number) =>
     resize(id, kind, cols, rows)
   )
+
+  // Right-click context menu for terminals: Copy the passed selection; Paste the
+  // clipboard into the PTY for interactive terminals (the read-only 'task' one
+  // gets Copy only).
+  ipcMain.on('term:menu', (e, id: string, kind: PtyKind, selection: string) => {
+    const clip = clipboard.readText()
+    const template: MenuItemConstructorOptions[] = [
+      {
+        label: 'Копіювати',
+        enabled: !!selection,
+        click: () => {
+          if (selection) clipboard.writeText(selection)
+        }
+      }
+    ]
+    if (kind !== 'task') {
+      template.push({
+        label: 'Вставити',
+        enabled: !!clip,
+        click: () => write(id, kind, clip)
+      })
+    }
+    const win = BrowserWindow.fromWebContents(e.sender)
+    Menu.buildFromTemplate(template).popup(win ? { window: win } : {})
+  })
 }

@@ -24,6 +24,8 @@ export interface Workspace {
   name: string
   /** git branch created for this workspace, e.g. conductor/<name>. */
   branch: string
+  /** The base ref this workspace's branch was created from (e.g. "origin/main"). */
+  baseBranch?: string
   /** Absolute path of the worktree on disk. */
   path: string
   /** Unique port exposed to scripts as CONDUCTOR_PORT. */
@@ -32,8 +34,12 @@ export interface Workspace {
   status: WorkspaceStatus
 }
 
-/** A PTY belongs to a workspace; 'claude' is the interactive session, 'task' aggregates script output. */
-export type PtyKind = 'claude' | 'task'
+/**
+ * A PTY belongs to a workspace: 'claude' is the interactive Claude session,
+ * 'task' aggregates script output (read-only), 'shell' is a free interactive
+ * shell in the workspace directory for running ad-hoc commands.
+ */
+export type PtyKind = 'claude' | 'task' | 'shell'
 
 export interface PtyData {
   id: string

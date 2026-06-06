@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../store'
 
 const SUGGESTIONS = [
@@ -15,23 +15,64 @@ const SUGGESTIONS = [
 ]
 
 export function NewWorkspaceModal(): JSX.Element {
-  const { createWorkspace, openNew, busy, error, clearError } = useStore()
+  const { workspaces, createWorkspace, openNew, busy, error, clearError } = useStore()
+  // One field: both the workspace name and the full branch name.
   const [name, setName] = useState(SUGGESTIONS[Math.floor(performance.now()) % SUGGESTIONS.length])
 
+  const [branches, setBranches] = useState<string[]>([])
+  const [base, setBase] = useState('')
+  const [search, setSearch] = useState('')
+  const [loadingBranches, setLoadingBranches] = useState(true)
+  const [branchError, setBranchError] = useState<string | null>(null)
+
+  // Pull branches dynamically (with a fresh git fetch) when the modal opens.
+  useEffect(() => {
+    let cancelled = false
+    window.api
+      .listBranches()
+      .then(({ branches, defaultBranch }) => {
+        if (cancelled) return
+        setBranches(branches)
+        setBase(defaultBranch || branches[0] || '')
+      })
+      .catch((e: Error) => !cancelled && setBranchError(e.message))
+      .finally(() => !cancelled && setLoadingBranches(false))
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return q ? branches.filter((b) => b.toLowerCase().includes(q)) : branches
+  }, [branches, search])
+
+  const trimmed = name.trim()
+  // Live validation: no existing workspace (active or archived) with this name/branch.
+  const duplicate = useMemo(
+    () => !!trimmed && workspaces.some((w) => w.name === trimmed || w.branch === trimmed),
+    [workspaces, trimmed]
+  )
+
+  const canSubmit =
+    !busy && !!trimmed && !duplicate && (!!base || branches.length === 0)
+
   const submit = (): void => {
-    if (name.trim()) void createWorkspace(name.trim())
+    if (canSubmit) void createWorkspace(trimmed, base || undefined)
   }
 
   return (
     <div className="modal-backdrop" onClick={() => !busy && openNew(false)}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 420 }}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 460 }}>
         <h2>Новий воркспейс</h2>
+
         <div className="field">
-          <label>Назва</label>
+          <label>Назва / гілка</label>
           <input
             autoFocus
             value={name}
             disabled={busy}
+            placeholder="напр. feature/login"
             onChange={(e) => {
               setName(e.target.value)
               clearError()
@@ -39,15 +80,53 @@ export function NewWorkspaceModal(): JSX.Element {
             onKeyDown={(e) => e.key === 'Enter' && submit()}
           />
           <div className="hint">
-            Створить git worktree на гілці <code>conductor/&lt;назва&gt;</code> і запустить setup-скрипт.
-            {error && <div className="err">{error}</div>}
+            Це і назва воркспейсу, і повна назва нової гілки (без обовʼязкового префікса), створеної
+            від базової.
+            {duplicate && <span className="err"> — воркспейс з такою назвою вже існує.</span>}
           </div>
         </div>
+
+        <div className="field">
+          <label>Базова гілка{base ? <span className="branch-current"> · {base}</span> : null}</label>
+          <input
+            placeholder="Пошук гілки…"
+            value={search}
+            disabled={busy || loadingBranches}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && filtered.length) {
+                setBase(filtered[0])
+                setSearch('')
+              }
+            }}
+          />
+          <div className="branch-list">
+            {loadingBranches ? (
+              <div className="branch-empty">Завантаження гілок…</div>
+            ) : branchError ? (
+              <div className="branch-empty err">{branchError}</div>
+            ) : filtered.length === 0 ? (
+              <div className="branch-empty">Нічого не знайдено.</div>
+            ) : (
+              filtered.map((b) => (
+                <div
+                  key={b}
+                  className={`branch-item ${b === base ? 'selected' : ''}`}
+                  onClick={() => setBase(b)}
+                >
+                  {b}
+                </div>
+              ))
+            )}
+          </div>
+          {error && <div className="err">{error}</div>}
+        </div>
+
         <div className="modal-actions">
           <button className="btn" disabled={busy} onClick={() => openNew(false)}>
             Скасувати
           </button>
-          <button className="btn primary" disabled={busy || !name.trim()} onClick={submit}>
+          <button className="btn primary" disabled={!canSubmit} onClick={submit}>
             {busy ? 'Створення…' : 'Створити'}
           </button>
         </div>

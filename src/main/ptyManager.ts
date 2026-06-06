@@ -95,6 +95,28 @@ export function startClaude(opts: {
   wire(opts.id, 'claude', e, proc)
 }
 
+/** Start a free interactive shell in the workspace directory (idempotent). */
+export function startShell(opts: {
+  id: string
+  cwd: string
+  env: NodeJS.ProcessEnv
+  cols: number
+  rows: number
+}): void {
+  const e = ensure(opts.id, 'shell')
+  if (e.proc) return
+  const shell = opts.env.SHELL || process.env.SHELL || '/bin/bash'
+  const proc = pty.spawn(shell, ['-l'], {
+    name: 'xterm-256color',
+    cwd: opts.cwd,
+    env: opts.env,
+    cols: opts.cols || 80,
+    rows: opts.rows || 24
+  })
+  e.proc = proc
+  wire(opts.id, 'shell', e, proc)
+}
+
 /**
  * Run a script file in the workspace's "task" terminal. Output accumulates in
  * the task buffer (preserved across setup/run/archive). Returns the exit code.
@@ -160,7 +182,7 @@ export function attach(id: string, kind: PtyKind): string {
 }
 
 export function killWorkspace(id: string): void {
-  for (const kind of ['claude', 'task'] as PtyKind[]) {
+  for (const kind of ['claude', 'task', 'shell'] as PtyKind[]) {
     const k = key(id, kind)
     const e = entries.get(k)
     if (e?.proc) killProc(e.proc)

@@ -1,7 +1,24 @@
+import { useEffect, useState } from 'react'
 import { useStore } from '../store'
 import type { Workspace } from '@shared/types'
 
 export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
+  // Current branch is read live from the worktree (the user may `git checkout`
+  // in the terminal), refreshed on switch and when the window regains focus.
+  const [curBranch, setCurBranch] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    const refresh = (): void => {
+      void window.api.currentBranch(ws.id).then((b) => !cancelled && setCurBranch(b))
+    }
+    refresh()
+    window.addEventListener('focus', refresh)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', refresh)
+    }
+  }, [ws.id, ws.status])
+
   const {
     activeKind,
     setKind,
@@ -29,8 +46,17 @@ export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
     <>
       <div className="toolbar">
         <div className="title">
-          {ws.name}
-          <small>{ws.path}</small>
+          <div className="title-main">
+            {ws.name}
+            <small>{ws.path}</small>
+          </div>
+          <div className="branch-info">
+            <span title="Поточна гілка">⎇ {curBranch || ws.branch}</span>
+            <span className="from" title="Базова гілка (звідки створено)">
+              {' '}
+              ← {ws.baseBranch || 'локальний HEAD'}
+            </span>
+          </div>
         </div>
         {running ? (
           <button
@@ -85,6 +111,12 @@ export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
           onClick={() => setKind('claude')}
         >
           Claude
+        </button>
+        <button
+          className={`tab ${activeKind === 'shell' ? 'active' : ''}`}
+          onClick={() => setKind('shell')}
+        >
+          Термінал
         </button>
         <button
           className={`tab ${activeKind === 'task' ? 'active' : ''}`}

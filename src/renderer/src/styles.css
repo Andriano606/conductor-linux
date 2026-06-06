@@ -147,11 +147,11 @@ button {
 }
 
 .toolbar {
-  height: 50px;
+  min-height: 50px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 14px;
+  padding: 6px 14px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-2);
 }
@@ -159,14 +159,31 @@ button {
 .toolbar .title {
   font-weight: 600;
   margin-right: auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.toolbar .title-main {
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .toolbar .title small {
   color: var(--text-dim);
   font-weight: 400;
   margin-left: 8px;
+}
+.toolbar .branch-info {
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.toolbar .branch-info .from {
+  color: var(--accent);
 }
 
 .tabs {
@@ -307,6 +324,41 @@ button {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 20px;
+}
+
+/* ---- Branch picker ---- */
+.branch-current {
+  color: var(--accent);
+  font-weight: 500;
+}
+.branch-list {
+  margin-top: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--bg-3);
+  border-radius: 8px;
+}
+.branch-item {
+  padding: 7px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  border-bottom: 1px solid var(--bg-2);
+}
+.branch-item:last-child {
+  border-bottom: none;
+}
+.branch-item:hover {
+  background: var(--bg-3);
+}
+.branch-item.selected {
+  background: var(--accent-2);
+  color: #fff;
+}
+.branch-empty {
+  padding: 12px 10px;
+  font-size: 13px;
+  color: var(--text-dim);
 }
 
 /* ---- Archived ---- */

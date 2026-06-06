@@ -42,6 +42,14 @@ function ensure(id: string, kind: PtyKind): TermEntry {
   term.loadAddon(fit)
   term.open(wrapper)
 
+  // Right-click anywhere in the terminal opens a native Copy/Paste menu. The
+  // current selection is captured now and sent to main so Copy works on the
+  // canvas-rendered selection (which isn't a normal DOM selection).
+  wrapper.addEventListener('contextmenu', (ev) => {
+    ev.preventDefault()
+    window.api.showTermMenu(id, kind, term.getSelection())
+  })
+
   if (!readOnly) {
     term.onData((d) => window.api.sendInput(id, kind, d))
   } else {
@@ -99,7 +107,7 @@ export function fitAndResize(id: string, kind: PtyKind): void {
 }
 
 export function disposeWorkspace(id: string): void {
-  for (const kind of ['claude', 'task'] as PtyKind[]) {
+  for (const kind of ['claude', 'task', 'shell'] as PtyKind[]) {
     const k = key(id, kind)
     const e = terms.get(k)
     if (e) {
