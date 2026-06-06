@@ -6,6 +6,7 @@ import { TerminalView } from './components/TerminalView'
 import { SettingsModal } from './components/SettingsModal'
 import { NewWorkspaceModal } from './components/NewWorkspaceModal'
 import { ArchivedModal } from './components/ArchivedModal'
+import { ConfirmModal } from './components/ConfirmModal'
 import { disposeWorkspace, writeData } from './termRegistry'
 
 export function App(): JSX.Element {
@@ -74,6 +75,7 @@ export function App(): JSX.Element {
       {showSettings && <SettingsModal />}
       {showNew && <NewWorkspaceModal />}
       {showArchived && <ArchivedModal />}
+      <ConfirmModal />
     </div>
   )
 }

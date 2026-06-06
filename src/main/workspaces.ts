@@ -118,15 +118,26 @@ export async function finishSetup(id: string, onChange: () => void): Promise<voi
 }
 
 /**
- * Re-start the Claude session for every active workspace whose worktree still
- * exists. Called on app launch so the consoles come back after a restart (PTYs
- * live only in memory and are killed when the app closes). Idempotent.
+ * On app launch: resolve any workspace left in a transient state (the app was
+ * closed mid-setup/mid-archive, which otherwise leaves it stuck forever), then
+ * re-start the Claude session for every usable workspace. PTYs live only in
+ * memory and are killed on quit, so consoles must be restarted. Idempotent.
  */
 export function restoreSessions(): void {
   const settings = getSettings()
   for (const ws of getWorkspaces()) {
-    if (ws.status !== 'active') continue
-    if (!existsSync(ws.path)) continue
+    if (ws.status === 'archived') continue
+    const exists = existsSync(ws.path)
+    // Heal stuck transient states left by an interrupted setup/archive.
+    if (ws.status === 'archiving') {
+      // The archive didn't finish: if the worktree is gone it's effectively
+      // archived; otherwise treat it as active so the user can retry.
+      updateWorkspaceStatus(ws.id, exists ? 'active' : 'archived')
+    } else if (ws.status === 'setting_up' && exists) {
+      // Setup was interrupted; make the workspace usable instead of stuck.
+      updateWorkspaceStatus(ws.id, 'active')
+    }
+    if (!exists) continue
     startClaude({ id: ws.id, cwd: ws.path, env: buildEnv(ws, settings), cols: 80, rows: 24 })
   }
 }

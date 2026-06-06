@@ -1,12 +1,12 @@
 import { useStore } from '../store'
 
 export function ArchivedModal(): JSX.Element {
-  const { workspaces, openArchived, restoreWorkspace, deleteWorkspace, error } = useStore()
+  const { workspaces, openArchived, restoreWorkspace, deleteWorkspace, askConfirm, error } = useStore()
   const archived = workspaces.filter((w) => w.status === 'archived')
 
-  const remove = (id: string, name: string): void => {
+  const remove = async (id: string, name: string): Promise<void> => {
     if (
-      confirm(`Видалити воркспейс «${name}» назавжди? Гілку git буде видалено — це незворотно.`)
+      await askConfirm(`Видалити воркспейс «${name}» назавжди? Гілку git буде видалено — це незворотно.`)
     ) {
       void deleteWorkspace(id)
     }
@@ -35,7 +35,7 @@ export function ArchivedModal(): JSX.Element {
                   >
                     ↩ Повернути
                   </button>
-                  <button className="btn danger" onClick={() => remove(w.id, w.name)}>
+                  <button className="btn danger" onClick={() => void remove(w.id, w.name)}>
                     🗑 Видалити
                   </button>
                 </div>

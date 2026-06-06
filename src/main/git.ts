@@ -3,6 +3,40 @@ import { promisify } from 'util'
 
 const run = promisify(execFile)
 
+/**
+ * Best-effort `git fetch` that is GUARANTEED to settle quickly. A hung remote
+ * helper (bad network / credential prompt) can keep stdio open so execFile's
+ * callback never fires; without this guard the caller (the New-workspace modal's
+ * branch loader) would hang forever. We resolve after a hard deadline and kill
+ * the process regardless, then fall back to the refs already on disk.
+ */
+function fetchQuiet(repoPath: string): Promise<void> {
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (): void => {
+      if (!done) {
+        done = true
+        resolve()
+      }
+    }
+    const child = execFile(
+      'git',
+      ['-C', repoPath, 'fetch', '--prune', '--quiet'],
+      { timeout: 8000, killSignal: 'SIGKILL' },
+      () => finish()
+    )
+    const t = setTimeout(() => {
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        /* already gone */
+      }
+      finish()
+    }, 8500)
+    if (typeof t.unref === 'function') t.unref()
+  })
+}
+
 export async function isGitRepo(repoPath: string): Promise<boolean> {
   if (!repoPath) return false
   try {
@@ -48,11 +82,7 @@ export async function worktreeAdd(
 export async function listBranches(
   repoPath: string
 ): Promise<{ branches: string[]; defaultBranch: string }> {
-  try {
-    await run('git', ['-C', repoPath, 'fetch', '--prune', '--quiet'], { timeout: 15000 })
-  } catch {
-    /* offline or no remote — use whatever refs we already have */
-  }
+  await fetchQuiet(repoPath)
 
   const { stdout } = await run('git', [
     '-C',

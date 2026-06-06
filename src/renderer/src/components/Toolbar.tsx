@@ -27,6 +27,7 @@ export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
     openActiveInBrowser,
     openActiveInIde,
     archiveActive,
+    askConfirm,
     busy,
     runningById,
     settings
@@ -36,8 +37,8 @@ export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
   const archiving = ws.status === 'archiving'
   const running = !!runningById[ws.id]
 
-  const archive = (): void => {
-    if (confirm(`Архівувати воркспейс «${ws.name}»? Worktree буде видалено.`)) {
+  const archive = async (): Promise<void> => {
+    if (await askConfirm(`Архівувати воркспейс «${ws.name}»? Worktree буде видалено.`)) {
       void archiveActive()
     }
   }
@@ -101,7 +102,7 @@ export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
         >
           ⧉ Відкрити в IDE
         </button>
-        <button className="btn danger" onClick={archive} disabled={archiving}>
+        <button className="btn danger" onClick={() => void archive()} disabled={archiving}>
           {archiving ? 'Архівується…' : 'Архівувати'}
         </button>
       </div>

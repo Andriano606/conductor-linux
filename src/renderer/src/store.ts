@@ -15,8 +15,12 @@ interface AppState {
   runningById: Record<string, boolean>
   /** Last-selected tab per workspace id, so switching workspaces keeps the tab. */
   kindById: Record<string, PtyKind>
+  /** Pending in-app confirmation (replaces native confirm(), which breaks window focus on Linux). */
+  confirmRequest: { message: string; onResolve: (ok: boolean) => void } | null
 
   load: () => Promise<void>
+  askConfirm: (message: string) => Promise<boolean>
+  resolveConfirm: (ok: boolean) => void
   setActive: (id: string) => void
   setKind: (kind: PtyKind) => void
   openSettings: (open: boolean) => void
@@ -48,6 +52,7 @@ export const useStore = create<AppState>((set, get) => ({
   error: null,
   runningById: {},
   kindById: {},
+  confirmRequest: null,
 
   load: async () => {
     const [settings, workspaces] = await Promise.all([
@@ -70,7 +75,8 @@ export const useStore = create<AppState>((set, get) => ({
       kindById: s.activeId ? { ...s.kindById, [s.activeId]: kind } : s.kindById
     })),
   openSettings: (open) => set({ showSettings: open }),
-  openNew: (open) => set({ showNew: open }),
+  // Reset any stale busy/error so the New-workspace modal always opens unblocked.
+  openNew: (open) => set(open ? { showNew: true, busy: false, error: null } : { showNew: false }),
   openArchived: (open) => set({ showArchived: open }),
 
   saveSettings: async (s) => {
@@ -172,6 +178,14 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (e) {
       set({ error: (e as Error).message })
     }
+  },
+
+  askConfirm: (message) =>
+    new Promise<boolean>((resolve) => set({ confirmRequest: { message, onResolve: resolve } })),
+  resolveConfirm: (ok) => {
+    const req = get().confirmRequest
+    if (req) req.onResolve(ok)
+    set({ confirmRequest: null })
   },
 
   setWorkspaces: (ws) => set({ workspaces: ws }),
