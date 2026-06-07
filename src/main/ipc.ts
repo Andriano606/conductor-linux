@@ -84,13 +84,16 @@ export function registerIpc(): void {
   // ---- Workspaces ----
   ipcMain.handle('workspaces:list', () => getWorkspaces())
 
-  ipcMain.handle('workspace:create', async (_e, projectId: string, name: string, baseBranch?: string) => {
-    const ws = await createWorkspace(projectId, name, baseBranch)
+  ipcMain.handle(
+    'workspace:create',
+    async (_e, projectId: string, name: string, baseBranch?: string, useExistingBranch?: boolean) => {
+    const ws = await createWorkspace(projectId, name, baseBranch, useExistingBranch)
     notifyWorkspacesChanged()
     // Run setup + start Claude in the background so the UI never blocks.
     void finishSetup(ws.id, notifyWorkspacesChanged)
     return ws
-  })
+    }
+  )
 
   ipcMain.handle('workspace:run', async (_e, id: string) => {
     await runWorkspace(id)

@@ -8,7 +8,11 @@ import { Api, mkProject, mkWs, setupRenderer } from '../helpers'
 let api: Api
 beforeEach(() => {
   api = setupRenderer()
-  api.listBranches.mockResolvedValue({ branches: ['main', 'dev'], defaultBranch: 'main' })
+  api.listBranches.mockResolvedValue({
+    branches: ['main', 'dev', 'origin/main'],
+    localBranches: ['main', 'dev'],
+    defaultBranch: 'main'
+  })
   // The modal is always opened in the context of a project.
   useStore.setState({ projects: [mkProject({ id: 'p1', name: 'proj' })], newWorkspaceProjectId: 'p1' })
 })
@@ -72,6 +76,49 @@ describe('NewWorkspaceModal', () => {
     await waitFor(() => expect(screen.getByText('dev')).toBeInTheDocument())
     fireEvent.change(nameInput(), { target: { value: '  newone  ' } })
     fireEvent.click(screen.getByText('Створити'))
-    expect(api.createWorkspace).toHaveBeenCalledWith('p1', 'newone', 'main')
+    expect(api.createWorkspace).toHaveBeenCalledWith('p1', 'newone', 'main', false)
+  })
+})
+
+describe('NewWorkspaceModal — existing branch', () => {
+  const toggle = (): HTMLElement => screen.getByText(/Використати існуючу гілку/)
+
+  it('deactivates the name field and submits the selected branch with no base', async () => {
+    render(<NewWorkspaceModal />)
+    await waitFor(() => expect(screen.getByText('dev')).toBeInTheDocument())
+    fireEvent.click(toggle())
+    // The name input stays in the DOM (stable layout) but is disabled and cleared.
+    const nameField = screen.getByPlaceholderText(/не використовується/) as HTMLInputElement
+    expect(nameField).toBeDisabled()
+    expect(nameField.value).toBe('')
+    // Pick a branch and submit — the branch alone drives the workspace.
+    fireEvent.click(within(document.querySelector('.branch-list') as HTMLElement).getByText('dev'))
+    fireEvent.click(screen.getByText('Створити'))
+    expect(api.createWorkspace).toHaveBeenCalledWith('p1', 'dev', undefined, true)
+  })
+
+  it('only offers local branches (no remote-tracking refs)', async () => {
+    render(<NewWorkspaceModal />)
+    await waitFor(() => expect(screen.getByText('dev')).toBeInTheDocument())
+    fireEvent.click(toggle())
+    const list = document.querySelector('.branch-list') as HTMLElement
+    expect(within(list).queryByText('origin/main')).not.toBeInTheDocument()
+  })
+
+  it('disables a branch that already backs a workspace and prevents selecting it', async () => {
+    useStore.setState({
+      projects: [mkProject({ id: 'p1' })],
+      newWorkspaceProjectId: 'p1',
+      workspaces: [mkWs({ id: 'a', projectId: 'p1', name: 'dev', branch: 'dev' })]
+    })
+    render(<NewWorkspaceModal />)
+    await waitFor(() => expect(screen.getByText('dev')).toBeInTheDocument())
+    fireEvent.click(toggle())
+    const items = Array.from(document.querySelectorAll('.branch-item')) as HTMLElement[]
+    const devItem = items.find((el) => el.textContent?.startsWith('dev')) as HTMLElement
+    expect(devItem.className).toContain('disabled')
+    // Clicking the taken branch does not select it.
+    fireEvent.click(devItem)
+    expect(devItem.className).not.toContain('selected')
   })
 })

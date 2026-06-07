@@ -77,27 +77,34 @@ export async function worktreeAdd(
  * List selectable base branches (local + remote-tracking), most-recently-committed
  * first, and the repo's default branch to preselect. Does a best-effort `git fetch`
  * first so remote branches are fresh; offline/no-remote just falls back to the
- * refs already on disk.
+ * refs already on disk. `localBranches` is the subset under refs/heads — the only
+ * ones that can be checked out directly into a worktree without creating a branch.
  */
 export async function listBranches(
   repoPath: string
-): Promise<{ branches: string[]; defaultBranch: string }> {
+): Promise<{ branches: string[]; localBranches: string[]; defaultBranch: string }> {
   await fetchQuiet(repoPath)
 
   const { stdout } = await run('git', [
     '-C',
     repoPath,
     'for-each-ref',
-    '--format=%(refname:short)',
+    '--format=%(refname)\t%(refname:short)',
     '--sort=-committerdate',
     'refs/heads',
     'refs/remotes'
   ])
-  const branches = stdout
+  const rows = stdout
     .split('\n')
     .map((s) => s.trim())
     .filter(Boolean)
-    .filter((b) => !b.endsWith('/HEAD'))
+    .map((line) => {
+      const [full, short] = line.split('\t')
+      return { full, short }
+    })
+    .filter((r) => r.short && !r.short.endsWith('/HEAD'))
+  const branches = rows.map((r) => r.short)
+  const localBranches = rows.filter((r) => r.full.startsWith('refs/heads/')).map((r) => r.short)
 
   let defaultBranch = ''
   try {
@@ -122,7 +129,7 @@ export async function listBranches(
   }
   if (!defaultBranch && branches.length) defaultBranch = branches[0]
 
-  return { branches, defaultBranch }
+  return { branches, localBranches, defaultBranch }
 }
 
 /** Add a worktree at wtPath checking out an already-existing branch. */

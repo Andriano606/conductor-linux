@@ -111,7 +111,8 @@ export async function deleteProject(id: string): Promise<void> {
 export async function createWorkspace(
   projectId: string,
   name: string,
-  baseBranch?: string
+  baseBranch?: string,
+  useExistingBranch?: boolean
 ): Promise<Workspace> {
   const settings = getSettings()
   const project = getProject(projectId)
@@ -121,9 +122,12 @@ export async function createWorkspace(
   }
 
   // One field is both the display name and the full branch name (no forced prefix).
+  // When checking out an existing branch, that branch name is also the workspace name.
   const branchName = name.trim()
   if (!branchName) throw new Error('Name is required.')
   // No other workspace in this project (active or archived) may reuse the name/branch.
+  // This also enforces "can't pick a branch a workspace already exists for" in the
+  // existing-branch flow, where branchName is the selected branch.
   if (
     getWorkspaces().some(
       (w) => w.projectId === projectId && (w.name === branchName || w.branch === branchName)
@@ -131,8 +135,13 @@ export async function createWorkspace(
   ) {
     throw new Error(`A workspace named "${branchName}" already exists.`)
   }
-  // The git branch must not already exist — `git worktree add -b` would fail.
-  if (await branchExists(project.repoPath, branchName)) {
+  if (useExistingBranch) {
+    // Reuse the branch in place — it must already exist; no new branch is created.
+    if (!(await branchExists(project.repoPath, branchName))) {
+      throw new Error(`Branch "${branchName}" does not exist.`)
+    }
+  } else if (await branchExists(project.repoPath, branchName)) {
+    // New-branch flow: `git worktree add -b` would fail on a name that already exists.
     throw new Error(`Branch "${branchName}" already exists. Choose another name.`)
   }
 
@@ -151,7 +160,11 @@ export async function createWorkspace(
   }
 
   mkdirSync(baseDir, { recursive: true })
-  await worktreeAdd(project.repoPath, wtPath, branchName, baseBranch)
+  if (useExistingBranch) {
+    await worktreeAddExisting(project.repoPath, wtPath, branchName)
+  } else {
+    await worktreeAdd(project.repoPath, wtPath, branchName, baseBranch)
+  }
 
   const ws: Workspace = {
     id: randomUUID(),
@@ -160,7 +173,8 @@ export async function createWorkspace(
     // slugified, deduped form on disk.
     name: branchName,
     branch: branchName,
-    baseBranch: baseBranch?.trim() || undefined,
+    // No base when reusing an existing branch — the worktree simply stays on it.
+    baseBranch: useExistingBranch ? undefined : baseBranch?.trim() || undefined,
     path: wtPath,
     port: nextPort(),
     createdAt: Date.now(),

@@ -38,7 +38,12 @@ interface AppState {
   createProject: (repoPath: string, scripts?: ProjectScripts) => Promise<void>
   saveProject: (project: Project) => Promise<void>
   deleteProject: (id: string) => Promise<void>
-  createWorkspace: (projectId: string, name: string, baseBranch?: string) => Promise<void>
+  createWorkspace: (
+    projectId: string,
+    name: string,
+    baseBranch?: string,
+    useExistingBranch?: boolean
+  ) => Promise<void>
   runActive: () => Promise<void>
   stopActive: () => Promise<void>
   openActiveInBrowser: () => void
@@ -139,10 +144,10 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  createWorkspace: async (projectId, name, baseBranch) => {
+  createWorkspace: async (projectId, name, baseBranch, useExistingBranch) => {
     set({ busy: true, error: null })
     try {
-      const ws = await window.api.createWorkspace(projectId, name, baseBranch)
+      const ws = await window.api.createWorkspace(projectId, name, baseBranch, useExistingBranch)
       // Show the "Скрипти" tab so the user can watch setup stream in the background.
       set((s) => ({
         newWorkspaceProjectId: null,

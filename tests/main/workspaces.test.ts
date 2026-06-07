@@ -247,6 +247,29 @@ describe('createWorkspace happy path', () => {
   })
 })
 
+describe('createWorkspace with an existing branch', () => {
+  it('checks out the branch in place without creating a new one', async () => {
+    git.branchExists.mockResolvedValue(true)
+    const ws = await createWorkspace('p1', 'feature-x', undefined, true)
+    expect(ws.branch).toBe('feature-x')
+    // No base is recorded — the worktree simply stays on the branch.
+    expect(ws.baseBranch).toBeUndefined()
+    expect(git.worktreeAddExisting).toHaveBeenCalledWith('/repo', '/wt/proj/feature-x', 'feature-x')
+    expect(git.worktreeAdd).not.toHaveBeenCalled()
+  })
+
+  it('throws when the selected branch does not exist', async () => {
+    git.branchExists.mockResolvedValue(false)
+    await expect(createWorkspace('p1', 'ghost', undefined, true)).rejects.toThrow(/does not exist/)
+  })
+
+  it('rejects a branch that already backs a workspace', async () => {
+    git.branchExists.mockResolvedValue(true)
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', name: 'feat', branch: 'feat' })])
+    await expect(createWorkspace('p1', 'feat', undefined, true)).rejects.toThrow(/already exists/)
+  })
+})
+
 describe('finishSetup', () => {
   it('runs the setup script, flips to active, starts claude and notifies', async () => {
     store._set({ ...settings }, [mkProject({ setupScript: '/setup.sh' })], [

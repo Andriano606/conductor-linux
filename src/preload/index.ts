@@ -33,11 +33,18 @@ const api = {
 
   // Workspaces
   listWorkspaces: (): Promise<Workspace[]> => ipcRenderer.invoke('workspaces:list'),
-  listBranches: (projectId: string): Promise<{ branches: string[]; defaultBranch: string }> =>
+  listBranches: (
+    projectId: string
+  ): Promise<{ branches: string[]; localBranches: string[]; defaultBranch: string }> =>
     ipcRenderer.invoke('git:branches', projectId),
   currentBranch: (id: string): Promise<string> => ipcRenderer.invoke('git:currentBranch', id),
-  createWorkspace: (projectId: string, name: string, baseBranch?: string): Promise<Workspace> =>
-    ipcRenderer.invoke('workspace:create', projectId, name, baseBranch),
+  createWorkspace: (
+    projectId: string,
+    name: string,
+    baseBranch?: string,
+    useExistingBranch?: boolean
+  ): Promise<Workspace> =>
+    ipcRenderer.invoke('workspace:create', projectId, name, baseBranch, useExistingBranch),
   runWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:run', id),
   stopWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:stop', id),
   openInBrowser: (id: string): Promise<void> => ipcRenderer.invoke('workspace:openInBrowser', id),

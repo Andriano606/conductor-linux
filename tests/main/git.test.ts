@@ -144,6 +144,13 @@ describe('listBranches (offline, no remote)', () => {
     expect(branches.every((b) => !b.endsWith('/HEAD'))).toBe(true)
   })
 
+  it('reports local branches in localBranches', async () => {
+    repo.branch('feature-a')
+    const { localBranches } = await listBranches(repo.dir)
+    expect(localBranches).toContain('main')
+    expect(localBranches).toContain('feature-a')
+  })
+
   it('settles quickly with no remote configured', async () => {
     const start = Date.now()
     await listBranches(repo.dir)
@@ -165,9 +172,12 @@ describe('listBranches (with a remote)', () => {
   afterEach(() => rmSync(remote, { recursive: true, force: true }))
 
   it('derives default branch from origin/HEAD and filters out */HEAD refs', async () => {
-    const { branches, defaultBranch } = await listBranches(repo.dir)
+    const { branches, localBranches, defaultBranch } = await listBranches(repo.dir)
     expect(defaultBranch).toBe('origin/main')
     expect(branches).toContain('origin/main')
     expect(branches.every((b) => !b.endsWith('/HEAD'))).toBe(true)
+    // Remote-tracking refs are excluded from localBranches.
+    expect(localBranches).toContain('main')
+    expect(localBranches).not.toContain('origin/main')
   })
 })

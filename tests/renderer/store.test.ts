@@ -153,7 +153,7 @@ describe('createWorkspace', () => {
   it('switches to the task tab and activates the new workspace on success', async () => {
     api.createWorkspace.mockResolvedValue(mkWs({ id: 'new' }))
     await get().createWorkspace('p1', 'feat', 'main')
-    expect(api.createWorkspace).toHaveBeenCalledWith('p1', 'feat', 'main')
+    expect(api.createWorkspace).toHaveBeenCalledWith('p1', 'feat', 'main', undefined)
     expect(get()).toMatchObject({
       newWorkspaceProjectId: null,
       activeId: 'new',
