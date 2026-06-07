@@ -159,7 +159,18 @@ export function runTask(opts: {
 /** Stop the running task proc (the run server) for a workspace. */
 export function stopTask(id: string): void {
   const e = entries.get(key(id, 'task'))
-  if (e?.proc) killProc(e.proc)
+  if (!e?.proc) return
+  // Emit running:false synchronously rather than relying on the proc's onExit:
+  // when stopping ahead of archive, finishArchive replaces e.proc with the
+  // archive script before this proc exits, so onExit treats it as superseded and
+  // never clears the Run/Stop state — leaving the button stuck at "Stop".
+  if (e.tracked) {
+    e.tracked = false
+    if (mainWC && !mainWC.isDestroyed()) {
+      mainWC.send('task:running', { id, running: false })
+    }
+  }
+  killProc(e.proc)
 }
 
 export function write(id: string, kind: PtyKind, data: string): void {

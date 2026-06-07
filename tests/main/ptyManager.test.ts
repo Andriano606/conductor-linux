@@ -191,6 +191,33 @@ describe('stopTask', () => {
     expect(() => stopTask('nope')).not.toThrow()
     expect(killSpy).not.toHaveBeenCalled()
   })
+
+  it('emits running:false synchronously when stopping a tracked run', () => {
+    void runTask({ id: 'w1', scriptPath: '/s.sh', label: 'run', ...baseOpts, track: true })
+    send.mockClear()
+    stopTask('w1')
+    // Does not wait for the proc's onExit — emitted right away so the Run/Stop
+    // button clears even if the proc is later superseded (e.g. by the archive script).
+    expect(send).toHaveBeenCalledWith('task:running', { id: 'w1', running: false })
+  })
+
+  it('does not re-emit running:false if a superseded run proc exits later', () => {
+    void runTask({ id: 'w1', scriptPath: '/s.sh', label: 'run', ...baseOpts, track: true })
+    const runProc = last()
+    stopTask('w1')
+    // Archive script replaces the (killed) run proc before it exits.
+    void runTask({ id: 'w1', scriptPath: '/archive.sh', label: 'archive', ...baseOpts })
+    send.mockClear()
+    runProc.emitExit(0)
+    expect(send).not.toHaveBeenCalledWith('task:running', { id: 'w1', running: false })
+  })
+
+  it('does not emit running:false when stopping an untracked task', () => {
+    void runTask({ id: 'w1', scriptPath: '/setup.sh', label: 'setup', ...baseOpts })
+    send.mockClear()
+    stopTask('w1')
+    expect(send).not.toHaveBeenCalledWith('task:running', expect.anything())
+  })
 })
 
 describe('write & resize', () => {
