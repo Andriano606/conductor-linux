@@ -16,6 +16,7 @@ const SCRIPTS: { key: ScriptField; label: string; hint: string }[] = [
 export function NewProjectModal(): JSX.Element {
   const { createProject, openNewProject, busy, error, clearError } = useStore()
   const [repoPath, setRepoPath] = useState('')
+  const [browserHost, setBrowserHost] = useState('')
   const [scripts, setScripts] = useState<Record<ScriptField, string>>({
     setupScript: '',
     runScript: '',
@@ -57,7 +58,7 @@ export function NewProjectModal(): JSX.Element {
 
   // The project name is derived from the repo folder name on the main side.
   const submit = (): void => {
-    if (canSubmit) void createProject(repoPath.trim(), scripts)
+    if (canSubmit) void createProject(repoPath.trim(), { ...scripts, browserHost })
   }
 
   return (
@@ -106,6 +107,22 @@ export function NewProjectModal(): JSX.Element {
             <div className="hint">{s.hint}</div>
           </div>
         ))}
+
+        <div className="field">
+          <label>Хост для «У браузері»</label>
+          <input
+            spellCheck={false}
+            value={browserHost}
+            disabled={busy}
+            placeholder="localhost"
+            onChange={(e) => setBrowserHost(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && submit()}
+          />
+          <div className="hint">
+            Адреса для кнопки «У браузері»: <code>{`http://${browserHost.trim() || 'localhost'}:<порт>`}</code>.
+            Порожнє — <code>localhost</code>.
+          </div>
+        </div>
 
         {error && <div className="err">{error}</div>}
 

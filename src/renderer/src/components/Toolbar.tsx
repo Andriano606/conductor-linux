@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '../store'
 import type { Workspace } from '@shared/types'
+import { workspaceUrl } from '@shared/workspaceUrl'
 
 export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
   // Current branch is read live from the worktree (the user may `git checkout`
@@ -30,8 +31,13 @@ export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
     askConfirm,
     busy,
     runningById,
-    settings
+    settings,
+    projects
   } = useStore()
+  const browserUrl = workspaceUrl(
+    projects.find((p) => p.id === ws.projectId)?.browserHost,
+    ws.port
+  )
   const ideConfigured = !!settings?.ideCommand
   const settingUp = ws.status === 'setting_up'
   const archiving = ws.status === 'archiving'
@@ -84,7 +90,7 @@ export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
           disabled={!running}
           title={
             running
-              ? `Відкрити http://localhost:${ws.port} у браузері`
+              ? `Відкрити ${browserUrl} у браузері`
               : 'Спочатку запусти run-скрипт'
           }
         >

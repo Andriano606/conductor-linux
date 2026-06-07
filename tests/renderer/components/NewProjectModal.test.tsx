@@ -54,7 +54,23 @@ describe('NewProjectModal', () => {
     expect(api.createProject).toHaveBeenCalledWith('/home/me/cool-app', {
       setupScript: '/s.sh',
       runScript: '/r.sh',
-      archiveScript: ''
+      archiveScript: '',
+      browserHost: ''
     })
+  })
+
+  it('passes a custom browser host', async () => {
+    api.isGitRepo.mockResolvedValue(true)
+    render(<NewProjectModal />)
+    fireEvent.change(pathInput(), { target: { value: '/home/me/cool-app' } })
+    fireEvent.change(screen.getByPlaceholderText('localhost'), {
+      target: { value: 'myapp.local' }
+    })
+    await waitFor(() => expect(screen.getByText('Створити')).not.toBeDisabled())
+    fireEvent.click(screen.getByText('Створити'))
+    expect(api.createProject).toHaveBeenCalledWith(
+      '/home/me/cool-app',
+      expect.objectContaining({ browserHost: 'myapp.local' })
+    )
   })
 })

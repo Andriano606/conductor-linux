@@ -155,11 +155,13 @@ describe('createProject', () => {
     const p = await createProject('/some/cool-app', {
       setupScript: ' /s.sh ',
       runScript: '/r.sh',
-      archiveScript: ''
+      archiveScript: '',
+      browserHost: ' myapp.local '
     })
     expect(p.setupScript).toBe('/s.sh')
     expect(p.runScript).toBe('/r.sh')
     expect(p.archiveScript).toBe('')
+    expect(p.browserHost).toBe('myapp.local')
   })
 })
 

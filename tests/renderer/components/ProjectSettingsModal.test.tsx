@@ -39,6 +39,19 @@ describe('ProjectSettingsModal', () => {
     )
   })
 
+  it('saves an edited browser host via updateProject', async () => {
+    api.isGitRepo.mockResolvedValue(true)
+    render(<ProjectSettingsModal />)
+    fireEvent.change(screen.getByPlaceholderText('localhost'), {
+      target: { value: 'myapp.local' }
+    })
+    await waitFor(() => expect(screen.getByText('Зберегти')).not.toBeDisabled())
+    fireEvent.click(screen.getByText('Зберегти'))
+    expect(api.updateProject).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'p1', browserHost: 'myapp.local' })
+    )
+  })
+
   it('disables saving when the repo path is flagged not-a-git-repo', async () => {
     api.isGitRepo.mockResolvedValue(false)
     render(<ProjectSettingsModal />)

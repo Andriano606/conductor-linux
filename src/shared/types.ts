@@ -32,14 +32,21 @@ export interface Project {
   runScript: string
   /** Absolute path to the archive script (runs before a workspace is archived). */
   archiveScript: string
+  /**
+   * Host (and optional scheme) used by the "open in browser" button, combined
+   * with the workspace port, e.g. "localhost" → http://localhost:<port>, or
+   * "myapp.local" / "https://myapp.local". Empty falls back to "localhost".
+   */
+  browserHost?: string
   createdAt: number
 }
 
-/** The scripts a project carries; supplied at create time or edited later. */
+/** The project fields supplied at create time or edited later. */
 export interface ProjectScripts {
   setupScript?: string
   runScript?: string
   archiveScript?: string
+  browserHost?: string
 }
 
 export type WorkspaceStatus = 'setting_up' | 'active' | 'archiving' | 'archived'

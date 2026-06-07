@@ -68,6 +68,7 @@ export async function createProject(
     setupScript: scripts?.setupScript?.trim() || '',
     runScript: scripts?.runScript?.trim() || '',
     archiveScript: scripts?.archiveScript?.trim() || '',
+    browserHost: scripts?.browserHost?.trim() || '',
     createdAt: Date.now()
   }
   addProject(project)

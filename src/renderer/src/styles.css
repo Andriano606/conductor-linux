@@ -293,8 +293,46 @@ button {
 }
 .term-host .term-mount {
   position: absolute;
-  inset: 0;
-  padding: 6px 8px;
+  /* Inset with offsets, NOT padding. Under `box-sizing: border-box` the
+     FitAddon reads getComputedStyle(mount).height as the full border-box height
+     and ignores padding, so a padded terminal is sized to the full host and
+     spills past the bottom edge by the top-padding amount. Offsets shrink the
+     mount's box itself, so FitAddon sizes the terminal to fit — with a small
+     gap on every side, and a bit more at the bottom. */
+  top: 6px;
+  right: 8px;
+  bottom: 12px;
+  left: 8px;
+}
+
+/*
+ * Make the xterm scrollbar grabbable. By default the .xterm-screen (the rendered
+ * rows) stacks ABOVE the .xterm-viewport, so the scrollbar — which lives on the
+ * viewport — sits underneath the text and every click there starts a text
+ * selection instead of dragging the thumb. We lift the viewport above the screen
+ * and make it transparent so the rows still show through, while the scrollbar
+ * becomes the top-most hit target. Text selection is unaffected: xterm binds its
+ * mousedown handler on the .xterm root and derives the cell from coordinates, so
+ * events over the transparent viewport still bubble up and select normally.
+ */
+.term-host .xterm .xterm-viewport {
+  z-index: 6;
+  background-color: transparent !important;
+  cursor: text;
+}
+.term-host .xterm-viewport::-webkit-scrollbar {
+  width: 12px;
+}
+.term-host .xterm-viewport::-webkit-scrollbar-track {
+  background: var(--term-bg);
+}
+.term-host .xterm-viewport::-webkit-scrollbar-thumb {
+  background: #4a4d55;
+  border-radius: 6px;
+  border: 3px solid var(--term-bg);
+}
+.term-host .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: #5c606a;
 }
 
 .placeholder {

@@ -116,6 +116,21 @@ export function ProjectSettingsModal(): JSX.Element | null {
           </div>
         ))}
 
+        <div className="field">
+          <label>Хост для «У браузері»</label>
+          <input
+            spellCheck={false}
+            value={form.browserHost ?? ''}
+            placeholder="localhost"
+            onChange={(e) => set('browserHost', e.target.value)}
+          />
+          <div className="hint">
+            Адреса для кнопки «У браузері»: <code>{`http://${form.browserHost?.trim() || 'localhost'}:<порт>`}</code>.
+            Можна вказати свій домен (напр. <code>myapp.local</code>) або зі схемою (
+            <code>https://myapp.local</code>). Порожнє — <code>localhost</code>.
+          </div>
+        </div>
+
         {error && <div className="err">{error}</div>}
 
         <div className="modal-actions">

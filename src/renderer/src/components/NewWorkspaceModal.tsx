@@ -14,13 +14,28 @@ const SUGGESTIONS = [
   'sofia'
 ]
 
+/**
+ * Pick a random suggested name, skipping any already taken by a workspace in
+ * this project. Falls back to the full list if every suggestion is taken.
+ */
+function pickSuggestion(used: Set<string>): string {
+  const free = SUGGESTIONS.filter((s) => !used.has(s))
+  const pool = free.length ? free : SUGGESTIONS
+  return pool[Math.floor(performance.now()) % pool.length]
+}
+
 export function NewWorkspaceModal(): JSX.Element {
   const { projects, workspaces, newWorkspaceProjectId, createWorkspace, openNewWorkspace, busy, error, clearError } =
     useStore()
   const projectId = newWorkspaceProjectId as string
   const project = projects.find((p) => p.id === projectId)
-  // One field: both the workspace name and the full branch name.
-  const [name, setName] = useState(SUGGESTIONS[Math.floor(performance.now()) % SUGGESTIONS.length])
+  // One field: both the workspace name and the full branch name. The initial
+  // suggestion is random but skips names already taken in this project.
+  const [name, setName] = useState(() =>
+    pickSuggestion(
+      new Set(workspaces.filter((w) => w.projectId === projectId).map((w) => w.branch))
+    )
+  )
 
   const [branches, setBranches] = useState<string[]>([])
   const [localBranches, setLocalBranches] = useState<string[]>([])
@@ -74,9 +89,12 @@ export function NewWorkspaceModal(): JSX.Element {
   )
 
   const baseTaken = useExisting && !!base && usedBranches.has(base)
-  const canSubmit = useExisting
+  // Block submit until branches have loaded: before that `branches` is empty and
+  // `base` unset, so the non-existing-mode check would otherwise pass on name
+  // alone and create a workspace off the wrong base.
+  const canSubmit = !loadingBranches && (useExisting
     ? !busy && !!base && !baseTaken
-    : !busy && !!trimmed && !duplicate && (!!base || branches.length === 0)
+    : !busy && !!trimmed && !duplicate && (!!base || branches.length === 0))
 
   const toggleExisting = (next: boolean): void => {
     setUseExisting(next)

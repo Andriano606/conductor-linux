@@ -42,6 +42,19 @@ function ensure(id: string, kind: PtyKind): TermEntry {
   term.loadAddon(fit)
   term.open(wrapper)
 
+  // The viewport is lifted above the rendered rows so its scrollbar is grabbable
+  // (see styles.css). As a result the viewport's cursor wins over the whole
+  // area, and Chromium ignores `cursor` on ::-webkit-scrollbar, so swap it here:
+  // a text caret over the rows, the default arrow over the scrollbar strip.
+  const viewport = wrapper.querySelector('.xterm-viewport') as HTMLElement | null
+  if (viewport) {
+    viewport.addEventListener('mousemove', (ev) => {
+      const x = ev.clientX - viewport.getBoundingClientRect().left
+      const next = x >= viewport.clientWidth ? 'default' : 'text'
+      if (viewport.style.cursor !== next) viewport.style.cursor = next
+    })
+  }
+
   // Right-click anywhere in the terminal opens a native Copy/Paste menu. The
   // current selection is captured now and sent to main so Copy works on the
   // canvas-rendered selection (which isn't a normal DOM selection).

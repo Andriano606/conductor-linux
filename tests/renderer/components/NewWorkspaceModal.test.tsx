@@ -28,6 +28,20 @@ describe('NewWorkspaceModal', () => {
     expect(screen.getByText('main')).toBeInTheDocument()
   })
 
+  it('seeds the name with a suggestion not already taken in the project', async () => {
+    // Occupy every suggested name except 'sofia' with existing workspaces.
+    const taken = ['lisbon', 'porto', 'kyiv', 'oslo', 'tokyo', 'cairo', 'lima', 'dakar', 'hanoi']
+    useStore.setState({
+      projects: [mkProject({ id: 'p1' })],
+      newWorkspaceProjectId: 'p1',
+      workspaces: taken.map((b, i) => mkWs({ id: `w${i}`, projectId: 'p1', name: b, branch: b }))
+    })
+    render(<NewWorkspaceModal />)
+    // The only free suggestion must be chosen.
+    expect((nameInput() as HTMLInputElement).value).toBe('sofia')
+    await waitFor(() => expect(screen.getByText('dev')).toBeInTheDocument())
+  })
+
   it('flags a duplicate name within the project and disables submit', async () => {
     useStore.setState({
       projects: [mkProject({ id: 'p1' })],
@@ -77,6 +91,27 @@ describe('NewWorkspaceModal', () => {
     fireEvent.change(nameInput(), { target: { value: '  newone  ' } })
     fireEvent.click(screen.getByText('Створити'))
     expect(api.createWorkspace).toHaveBeenCalledWith('p1', 'newone', 'main', false)
+  })
+
+  it('keeps submit disabled until branches finish loading', async () => {
+    // Hold the branch list pending so the modal stays in its loading state.
+    let resolve!: (v: {
+      branches: string[]
+      localBranches: string[]
+      defaultBranch: string
+    }) => void
+    api.listBranches.mockReturnValue(
+      new Promise((r) => {
+        resolve = r
+      })
+    )
+    render(<NewWorkspaceModal />)
+    // Even with a valid name typed, the button is disabled while loading.
+    fireEvent.change(nameInput(), { target: { value: 'newone' } })
+    expect(screen.getByText('Створити')).toBeDisabled()
+
+    resolve({ branches: ['main', 'dev'], localBranches: ['main', 'dev'], defaultBranch: 'main' })
+    await waitFor(() => expect(screen.getByText('Створити')).not.toBeDisabled())
   })
 })
 

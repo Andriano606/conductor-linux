@@ -12,6 +12,7 @@ import {
   updateProject
 } from './store'
 import { currentBranch, isGitRepo, listBranches } from './git'
+import { workspaceUrl } from '../shared/workspaceUrl'
 import { attach, resize, stopTask, write } from './ptyManager'
 import {
   beginArchive,
@@ -105,7 +106,7 @@ export function registerIpc(): void {
   // system's default browser.
   ipcMain.handle('workspace:openInBrowser', (_e, id: string) => {
     const ws = getWorkspace(id)
-    if (ws) void shell.openExternal(`http://localhost:${ws.port}`)
+    if (ws) void shell.openExternal(workspaceUrl(getProject(ws.projectId)?.browserHost, ws.port))
   })
 
   // Open the workspace's worktree in the configured IDE. Runs through a login
