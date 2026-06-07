@@ -34,6 +34,10 @@ const store = vi.hoisted(() => {
       const w = workspaces.find((x) => x.id === id)
       if (w) w.status = status
     }),
+    updateWorkspaceSetupStatus: vi.fn((id: string, setupStatus: Workspace['setupStatus']) => {
+      const w = workspaces.find((x) => x.id === id)
+      if (w) w.setupStatus = setupStatus
+    }),
     nextPort: vi.fn(() => 3010)
   }
 })
@@ -278,11 +282,25 @@ describe('finishSetup', () => {
       mkWs({ id: 'a', status: 'setting_up' })
     ])
     const onChange = vi.fn()
+    ptym.runTask.mockResolvedValue(0)
     await finishSetup('a', onChange)
     expect(ptym.runTask).toHaveBeenCalledWith(expect.objectContaining({ scriptPath: '/setup.sh' }))
     expect(store.updateWorkspaceStatus).toHaveBeenCalledWith('a', 'active')
     expect(ptym.startClaude).toHaveBeenCalled()
     expect(onChange).toHaveBeenCalled()
+    // Setup is reset to pending while it runs, then resolved by the exit code.
+    expect(store.updateWorkspaceSetupStatus).toHaveBeenCalledWith('a', 'pending')
+    expect(store.updateWorkspaceSetupStatus).toHaveBeenCalledWith('a', 'success')
+  })
+
+  it('marks setup as error when the setup script exits non-zero', async () => {
+    store._set({ ...settings }, [mkProject({ setupScript: '/setup.sh' })], [
+      mkWs({ id: 'a', status: 'setting_up' })
+    ])
+    ptym.runTask.mockResolvedValue(1)
+    await finishSetup('a', vi.fn())
+    expect(store.updateWorkspaceSetupStatus).toHaveBeenCalledWith('a', 'error')
+    expect(store.updateWorkspaceSetupStatus).not.toHaveBeenCalledWith('a', 'success')
   })
 
   it('starts claude immediately, in parallel with (not after) the setup script', async () => {
@@ -336,11 +354,12 @@ describe('finishSetup', () => {
     expect(onChange).toHaveBeenCalled()
   })
 
-  it('skips the setup script when none is configured', async () => {
+  it('skips the setup script when none is configured (setup counts as success)', async () => {
     store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', status: 'setting_up' })])
     await finishSetup('a', vi.fn())
     expect(ptym.runTask).not.toHaveBeenCalled()
     expect(ptym.startClaude).toHaveBeenCalled()
+    expect(store.updateWorkspaceSetupStatus).toHaveBeenCalledWith('a', 'success')
   })
 
   it('returns without throwing for an unknown id', async () => {
@@ -396,6 +415,18 @@ describe('restoreSessions healing matrix', () => {
     fsm.existsSync.mockReturnValue(true)
     restoreSessions()
     expect(ptym.startClaude).not.toHaveBeenCalled()
+  })
+
+  it('marks a setup left pending (killed by the quit) as failed', () => {
+    store._set({ ...settings }, [mkProject()], [
+      mkWs({ id: 'a', status: 'active', path: '/wt/proj/a', setupStatus: 'pending' }),
+      mkWs({ id: 'b', status: 'active', path: '/wt/proj/b', setupStatus: 'success' })
+    ])
+    fsm.existsSync.mockReturnValue(true)
+    restoreSessions()
+    expect(store.updateWorkspaceSetupStatus).toHaveBeenCalledWith('a', 'error')
+    // A resolved setup is left untouched.
+    expect(store.updateWorkspaceSetupStatus).not.toHaveBeenCalledWith('b', expect.anything())
   })
 })
 

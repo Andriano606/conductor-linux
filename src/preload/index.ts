@@ -57,6 +57,11 @@ const api = {
     ipcRenderer.on('task:running', listener)
     return () => ipcRenderer.removeListener('task:running', listener)
   },
+  onClaudeBusy: (cb: (d: { id: string; busy: boolean }) => void): (() => void) => {
+    const listener = (_e: unknown, d: { id: string; busy: boolean }): void => cb(d)
+    ipcRenderer.on('claude:busy', listener)
+    return () => ipcRenderer.removeListener('claude:busy', listener)
+  },
   onWorkspacesChanged: (cb: (workspaces: Workspace[]) => void): (() => void) => {
     const listener = (_e: unknown, workspaces: Workspace[]): void => cb(workspaces)
     ipcRenderer.on('workspaces:changed', listener)

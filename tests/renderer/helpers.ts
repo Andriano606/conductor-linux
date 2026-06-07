@@ -59,6 +59,7 @@ export function makeApi() {
     restoreWorkspace: vi.fn(async () => {}),
     deleteWorkspace: vi.fn(async () => {}),
     onTaskRunning: vi.fn(() => () => {}),
+    onClaudeBusy: vi.fn(() => () => {}),
     onWorkspacesChanged: vi.fn(() => () => {}),
     attachPty: vi.fn(async () => ''),
     sendInput: vi.fn(),

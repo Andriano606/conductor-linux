@@ -51,6 +51,13 @@ export interface ProjectScripts {
 
 export type WorkspaceStatus = 'setting_up' | 'active' | 'archiving' | 'archived'
 
+/**
+ * Outcome of the workspace's setup script, persisted so the sidebar indicator
+ * survives restarts: 'pending' while it runs, 'success'/'error' from its exit
+ * code. Undefined for legacy workspaces created before this was tracked.
+ */
+export type SetupStatus = 'pending' | 'success' | 'error'
+
 export interface Workspace {
   id: string
   /** The project (repository) this workspace belongs to. */
@@ -66,6 +73,8 @@ export interface Workspace {
   port: number
   createdAt: number
   status: WorkspaceStatus
+  /** Persisted setup-script outcome, surfaced as a sidebar indicator. */
+  setupStatus?: SetupStatus
 }
 
 /**

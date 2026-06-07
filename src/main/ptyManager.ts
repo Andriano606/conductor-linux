@@ -9,9 +9,16 @@ interface Entry {
   proc?: pty.IPty
   /** Current task proc is a tracked "run" (drives the Run/Stop button). */
   tracked?: boolean
+  /** Claude only: true while output is actively streaming (the "working" dot). */
+  busy?: boolean
+  /** Debounce timer that flips `busy` back off after a quiet gap. */
+  busyTimer?: ReturnType<typeof setTimeout>
 }
 
 const MAX_BUFFER = 500_000
+// Claude is considered "working" while its PTY keeps emitting output; once it
+// goes quiet for this long we treat it as idle (waiting for the user).
+const CLAUDE_IDLE_MS = 800
 const entries = new Map<string, Entry>()
 let mainWC: WebContents | null = null
 
@@ -51,6 +58,17 @@ function killProc(proc: pty.IPty): void {
   }
 }
 
+function send(channel: string, payload: unknown): void {
+  if (mainWC && !mainWC.isDestroyed()) mainWC.send(channel, payload)
+}
+
+/** Flip Claude's "working" state and notify the renderer only on a change. */
+function setClaudeBusy(id: string, e: Entry, busy: boolean): void {
+  if (e.busy === busy) return
+  e.busy = busy
+  send('claude:busy', { id, busy })
+}
+
 function wire(id: string, kind: PtyKind, e: Entry, proc: pty.IPty): void {
   proc.onData((d) => {
     e.buffer += d
@@ -58,12 +76,22 @@ function wire(id: string, kind: PtyKind, e: Entry, proc: pty.IPty): void {
     if (e.streaming && mainWC && !mainWC.isDestroyed()) {
       mainWC.send('pty:data', { id, kind, data: d })
     }
+    // Output is flowing ⇒ Claude is working; reset the idle countdown.
+    if (kind === 'claude') {
+      setClaudeBusy(id, e, true)
+      if (e.busyTimer) clearTimeout(e.busyTimer)
+      e.busyTimer = setTimeout(() => setClaudeBusy(id, e, false), CLAUDE_IDLE_MS)
+    }
   })
   proc.onExit(({ exitCode }) => {
     // A newer proc may have replaced this one (e.g. run restarted); only the
     // current proc should clear state and emit lifecycle events.
     const superseded = e.proc !== proc
     if (!superseded) e.proc = undefined
+    if (kind === 'claude' && !superseded) {
+      if (e.busyTimer) clearTimeout(e.busyTimer)
+      setClaudeBusy(id, e, false)
+    }
     if (mainWC && !mainWC.isDestroyed()) {
       mainWC.send('pty:exit', { id, kind, exitCode })
       if (kind === 'task' && !superseded && e.tracked) {

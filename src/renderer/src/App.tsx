@@ -24,7 +24,8 @@ export function App(): JSX.Element {
     load,
     setProjects,
     setWorkspaces,
-    setRunning
+    setRunning,
+    setClaudeBusy
   } = useStore()
 
   useEffect(() => {
@@ -32,6 +33,7 @@ export function App(): JSX.Element {
 
     const offData = window.api.onPtyData(({ id, kind, data }) => writeData(id, kind, data))
     const offRunning = window.api.onTaskRunning(({ id, running }) => setRunning(id, running))
+    const offBusy = window.api.onClaudeBusy(({ id, busy }) => setClaudeBusy(id, busy))
     const offProjects = window.api.onProjectsChanged((next) => setProjects(next))
     const offChanged = window.api.onWorkspacesChanged((next) => {
       const state = useStore.getState()
@@ -56,6 +58,7 @@ export function App(): JSX.Element {
     return () => {
       offData()
       offRunning()
+      offBusy()
       offProjects()
       offChanged()
     }

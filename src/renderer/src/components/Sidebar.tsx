@@ -1,10 +1,30 @@
+import type { Workspace } from '@shared/types'
 import { useStore } from '../store'
+
+/**
+ * The persisted setup indicator: a spinner while setup runs, then a green dot on
+ * success or a red dot on failure. Nothing for legacy workspaces with no record.
+ */
+function SetupIndicator({ w }: { w: Workspace }): JSX.Element | null {
+  if (w.status === 'setting_up' || w.setupStatus === 'pending') {
+    return <span className="ind-spin" title="Setup виконується…" />
+  }
+  if (w.setupStatus === 'success') {
+    return <span className="ind ind-ok" title="Setup завершився успішно" />
+  }
+  if (w.setupStatus === 'error') {
+    return <span className="ind ind-err" title="Setup завершився з помилкою" />
+  }
+  return null
+}
 
 export function Sidebar(): JSX.Element {
   const {
     projects,
     workspaces,
     activeId,
+    runningById,
+    claudeBusyById,
     setActive,
     openNewProject,
     openNewWorkspace,
@@ -67,13 +87,19 @@ export function Sidebar(): JSX.Element {
                       className={`ws-item ${w.id === activeId ? 'active' : ''}`}
                       onClick={() => setActive(w.id)}
                     >
-                      <div className="name">
-                        {w.name}
-                        {w.status === 'setting_up' && (
-                          <span className="ws-badge">⏳ налаштування…</span>
-                        )}
-                        {w.status === 'archiving' && <span className="ws-badge">📦 архівується…</span>}
+                      <div className="ws-top">
+                        <span className="name">{w.name}</span>
+                        <span className="ws-indicators">
+                          <SetupIndicator w={w} />
+                          {runningById[w.id] && (
+                            <span className="ind ind-run" title="Run-скрипт запущено" />
+                          )}
+                          {claudeBusyById[w.id] && (
+                            <span className="ind-spin ind-claude" title="Claude працює" />
+                          )}
+                        </span>
                       </div>
+                      {w.status === 'archiving' && <span className="ws-badge">📦 архівується…</span>}
                       <div className="meta">
                         {w.branch} · :{w.port}
                       </div>

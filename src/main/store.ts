@@ -150,6 +150,14 @@ export function updateWorkspaceStatus(id: string, status: Workspace['status']): 
   }
 }
 
+export function updateWorkspaceSetupStatus(id: string, setupStatus: Workspace['setupStatus']): void {
+  const ws = data.workspaces.find((w) => w.id === id)
+  if (ws) {
+    ws.setupStatus = setupStatus
+    persist()
+  }
+}
+
 /**
  * Lowest free port starting at the configured startPort, skipping ports already
  * assigned to a workspace. Exposed to scripts as CONDUCTOR_PORT. Ports are

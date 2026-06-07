@@ -264,3 +264,47 @@ describe('killWorkspace & killAll', () => {
     expect(attach('w2', 'claude')).toBe('')
   })
 })
+
+describe('claude working indicator', () => {
+  it('emits busy:true on output and busy:false after the idle gap', () => {
+    vi.useFakeTimers()
+    startClaude({ id: 'w1', ...baseOpts })
+    last().emitData('✻ Thinking…')
+    expect(send).toHaveBeenCalledWith('claude:busy', { id: 'w1', busy: true })
+    send.mockClear()
+    // Continued output inside the idle window does not re-emit busy:true.
+    last().emitData(' more tokens')
+    expect(send).not.toHaveBeenCalledWith('claude:busy', { id: 'w1', busy: true })
+    // After a quiet gap it flips to idle.
+    vi.advanceTimersByTime(900)
+    expect(send).toHaveBeenCalledWith('claude:busy', { id: 'w1', busy: false })
+    vi.useRealTimers()
+  })
+
+  it('flips back to busy when output resumes after going idle', () => {
+    vi.useFakeTimers()
+    startClaude({ id: 'w1', ...baseOpts })
+    last().emitData('a')
+    vi.advanceTimersByTime(900)
+    send.mockClear()
+    last().emitData('b')
+    expect(send).toHaveBeenCalledWith('claude:busy', { id: 'w1', busy: true })
+    vi.useRealTimers()
+  })
+
+  it('clears busy when the claude session exits', () => {
+    vi.useFakeTimers()
+    startClaude({ id: 'w1', ...baseOpts })
+    last().emitData('x')
+    send.mockClear()
+    last().emitExit(0)
+    expect(send).toHaveBeenCalledWith('claude:busy', { id: 'w1', busy: false })
+    vi.useRealTimers()
+  })
+
+  it('does not track busy for task output', () => {
+    void runTask({ id: 'w1', scriptPath: '/r.sh', label: 'run', ...baseOpts })
+    last().emitData('building…')
+    expect(send).not.toHaveBeenCalledWith('claude:busy', expect.anything())
+  })
+})

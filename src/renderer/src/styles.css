@@ -162,8 +162,66 @@ button {
   background: var(--bg-3);
   border-color: var(--accent-2);
 }
+.ws-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .ws-item .name {
   font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The three status indicators (setup / run / claude), right-aligned in the row. */
+.ws-indicators {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.ind {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ind-ok {
+  background: var(--green);
+}
+.ind-err {
+  background: var(--danger);
+}
+.ind-run {
+  background: var(--green);
+  box-shadow: 0 0 0 0 rgba(92, 200, 138, 0.6);
+  animation: pulse 1.6s ease-out infinite;
+}
+/* Small spinner reused for setup-in-progress and claude-working. */
+.ind-spin {
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--bg-3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: spin 0.7s linear infinite;
+}
+.ind-claude {
+  border-top-color: var(--accent);
+}
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(92, 200, 138, 0.55);
+  }
+  70% {
+    box-shadow: 0 0 0 5px rgba(92, 200, 138, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(92, 200, 138, 0);
+  }
 }
 .ws-badge {
   margin-left: 8px;

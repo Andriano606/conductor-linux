@@ -19,6 +19,8 @@ interface AppState {
   error: string | null
   /** Whether a run script is currently active, per workspace id. */
   runningById: Record<string, boolean>
+  /** Whether Claude is currently working (streaming output), per workspace id. */
+  claudeBusyById: Record<string, boolean>
   /** Last-selected tab per workspace id, so switching workspaces keeps the tab. */
   kindById: Record<string, PtyKind>
   /** Pending in-app confirmation (replaces native confirm(), which breaks window focus on Linux). */
@@ -52,6 +54,7 @@ interface AppState {
   restoreWorkspace: (id: string) => Promise<void>
   deleteWorkspace: (id: string) => Promise<void>
   setRunning: (id: string, running: boolean) => void
+  setClaudeBusy: (id: string, busy: boolean) => void
   setProjects: (projects: Project[]) => void
   setWorkspaces: (ws: Workspace[]) => void
   clearError: () => void
@@ -71,6 +74,7 @@ export const useStore = create<AppState>((set, get) => ({
   busy: false,
   error: null,
   runningById: {},
+  claudeBusyById: {},
   kindById: {},
   confirmRequest: null,
 
@@ -201,6 +205,9 @@ export const useStore = create<AppState>((set, get) => ({
 
   setRunning: (id, running) =>
     set((s) => ({ runningById: { ...s.runningById, [id]: running } })),
+
+  setClaudeBusy: (id, busy) =>
+    set((s) => ({ claudeBusyById: { ...s.claudeBusyById, [id]: busy } })),
 
   archiveActive: async () => {
     const id = get().activeId

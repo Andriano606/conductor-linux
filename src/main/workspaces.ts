@@ -13,7 +13,8 @@ import {
   nextPort,
   removeProject,
   removeWorkspace,
-  updateWorkspaceStatus
+  updateWorkspaceStatus,
+  updateWorkspaceSetupStatus
 } from './store'
 import {
   branchDelete,
@@ -179,7 +180,9 @@ export async function createWorkspace(
     path: wtPath,
     port: nextPort(),
     createdAt: Date.now(),
-    status: 'setting_up'
+    status: 'setting_up',
+    // Setup hasn't run yet; finishSetup resolves this to success/error.
+    setupStatus: 'pending'
   }
   addWorkspace(ws)
   return ws
@@ -201,11 +204,14 @@ export async function finishSetup(id: string, onChange: () => void): Promise<voi
   // Flip to active and start Claude right away so the window opens without
   // blocking on the setup script.
   updateWorkspaceStatus(ws.id, 'active')
+  // Reset to pending — matters on restore, where a prior success/error persists.
+  updateWorkspaceSetupStatus(ws.id, 'pending')
   startClaude({ id: ws.id, cwd: ws.path, env, cols: 80, rows: 24, args: settings.claudeArgs })
   onChange()
-  // Run the setup script alongside the now-live Claude session.
+  // Run the setup script alongside the now-live Claude session; its exit code
+  // becomes the persisted setup indicator. No script ⇒ nothing to fail.
   if (project.setupScript) {
-    await runTask({
+    const code = await runTask({
       id: ws.id,
       scriptPath: project.setupScript,
       label: 'setup',
@@ -214,7 +220,11 @@ export async function finishSetup(id: string, onChange: () => void): Promise<voi
       cols: 80,
       rows: 24
     })
+    updateWorkspaceSetupStatus(ws.id, code === 0 ? 'success' : 'error')
+  } else {
+    updateWorkspaceSetupStatus(ws.id, 'success')
   }
+  onChange()
 }
 
 /**
@@ -239,6 +249,10 @@ export function restoreSessions(): void {
       // Setup was interrupted; make the workspace usable instead of stuck.
       updateWorkspaceStatus(ws.id, 'active')
     }
+    // A setup left 'pending' means the script was killed mid-run by the quit —
+    // its process is gone, so it can never resolve. Mark it failed (not a stuck
+    // spinner) so the indicator reflects reality.
+    if (ws.setupStatus === 'pending') updateWorkspaceSetupStatus(ws.id, 'error')
     if (!exists) continue
     startClaude({
       id: ws.id,
