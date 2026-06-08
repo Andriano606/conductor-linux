@@ -50,7 +50,10 @@ export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
   }
 
   const curBranchName = curBranch || ws.branch
-  const baseBranchName = ws.baseBranch || 'локальний HEAD'
+  // Display/copy the base branch without its remote prefix (origin/main → main):
+  // friendlier to paste into `git switch` (a bare name avoids detached HEAD). The
+  // stored ws.baseBranch keeps the real ref — git logic is unchanged.
+  const baseBranchName = ws.baseBranch ? stripRemotePrefix(ws.baseBranch) : 'локальний HEAD'
 
   return (
     <>
@@ -134,6 +137,11 @@ export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
 }
 
 const MAX_BRANCH_CHARS = 15
+
+/** Drop a leading "origin/" so a remote-tracking base shows as a plain name. */
+function stripRemotePrefix(branch: string): string {
+  return branch.replace(/^origin\//, '')
+}
 
 // A branch badge: shows the name truncated to MAX_BRANCH_CHARS. Hovering pops
 // the full name; clicking copies it and flashes a green "Скопійовано ✓".

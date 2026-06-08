@@ -75,6 +75,21 @@ describe('Toolbar', () => {
     expect(screen.getByText(/Скопійовано/)).toBeInTheDocument()
   })
 
+  it('shows and copies the base branch without its origin/ prefix', async () => {
+    const writeText = vi.fn()
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    render(<Toolbar ws={mkWs({ id: 'a', baseBranch: 'origin/feature/x' })} />)
+    const baseBadge = await screen.findByText('feature/x')
+    expect(screen.queryByText('origin/feature/x')).not.toBeInTheDocument()
+    fireEvent.click(baseBadge.closest('button')!)
+    expect(writeText).toHaveBeenCalledWith('feature/x')
+  })
+
+  it('leaves a local base branch (no remote prefix) unchanged', async () => {
+    render(<Toolbar ws={mkWs({ id: 'a', baseBranch: 'develop' })} />)
+    expect(await screen.findByText('develop')).toBeInTheDocument()
+  })
+
   it('switches tabs via setKind', () => {
     render(<Toolbar ws={ws} />)
     fireEvent.click(screen.getByText('Скрипти'))
