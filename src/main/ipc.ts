@@ -23,6 +23,7 @@ import {
   ensureShell,
   finishArchive,
   finishSetup,
+  killWorkspaceProcesses,
   projectNameFromPath,
   restoreWorktree,
   runWorkspace
@@ -101,6 +102,15 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('workspace:stop', (_e, id: string) => stopTask(id))
+
+  // Force-clean a stuck workspace: kill its tracked PTYs plus any detached orphan
+  // (test runners, headless Chrome) still rooted in the worktree. Returns the
+  // orphan count so the UI can report what it cleared.
+  ipcMain.handle('workspace:killProcesses', async (_e, id: string) => {
+    const reaped = await killWorkspaceProcesses(id)
+    notifyWorkspacesChanged()
+    return reaped
+  })
 
   // Open the workspace's running app (served on its CONDUCTOR_PORT) in the
   // system's default browser.

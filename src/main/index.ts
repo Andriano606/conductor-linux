@@ -41,7 +41,9 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null)
   initStore()
   registerIpc()
-  restoreSessions()
+  // Reaps orphaned processes from the previous session before restarting Claude;
+  // fire-and-forget so window creation isn't blocked by the SIGTERM grace period.
+  void restoreSessions()
   createWindow()
 
   app.on('activate', () => {

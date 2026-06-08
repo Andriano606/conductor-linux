@@ -63,6 +63,9 @@ const ptym = vi.hoisted(() => ({
 }))
 vi.mock('../../src/main/ptyManager', () => ptym)
 
+const reaper = vi.hoisted(() => ({ reapWorkspaceProcesses: vi.fn(async () => [] as number[]) }))
+vi.mock('../../src/main/procReaper', () => reaper)
+
 const fsm = vi.hoisted(() => ({ existsSync: vi.fn(() => false), mkdirSync: vi.fn() }))
 vi.mock('fs', () => fsm)
 
@@ -74,6 +77,7 @@ import {
   deleteProject,
   finishArchive,
   finishSetup,
+  killWorkspaceProcesses,
   projectNameFromPath,
   restoreSessions,
   restoreWorktree,
@@ -375,7 +379,7 @@ describe('finishSetup', () => {
 })
 
 describe('restoreSessions healing matrix', () => {
-  it('reconciles transient states and restarts claude only for live worktrees', () => {
+  it('reconciles transient states and restarts claude only for live worktrees', async () => {
     store._set({ ...settings }, [mkProject()], [
       mkWs({ id: 'archived', status: 'archived', path: '/wt/proj/archived' }),
       mkWs({ id: 'arch-gone', status: 'archiving', path: '/wt/proj/arch-gone' }),
@@ -387,7 +391,7 @@ describe('restoreSessions healing matrix', () => {
     const present = new Set(['/wt/proj/arch-live', '/wt/proj/setup-live', '/wt/proj/active-live'])
     fsm.existsSync.mockImplementation((p: string) => present.has(p))
 
-    restoreSessions()
+    await restoreSessions()
 
     expect(store.updateWorkspaceStatus).toHaveBeenCalledWith('arch-gone', 'archived')
     expect(store.updateWorkspaceStatus).toHaveBeenCalledWith('arch-live', 'active')
@@ -397,36 +401,63 @@ describe('restoreSessions healing matrix', () => {
 
     const started = ptym.startClaude.mock.calls.map((c) => c[0].id)
     expect(started.sort()).toEqual(['active-live', 'arch-live', 'setup-live'])
+
+    // Each live workspace has its orphaned processes reaped before Claude restarts.
+    const reaped = reaper.reapWorkspaceProcesses.mock.calls.map((c) => c[0]).sort()
+    expect(reaped).toEqual(['/wt/proj/active-live', '/wt/proj/arch-live', '/wt/proj/setup-live'])
+    // The reap for a workspace must precede its Claude restart (env carries our
+    // marker, so Claude must not be running when we scan).
+    const reapOrder = reaper.reapWorkspaceProcesses.mock.invocationCallOrder[0]
+    const startOrder = ptym.startClaude.mock.invocationCallOrder[0]
+    expect(reapOrder).toBeLessThan(startOrder)
   })
 
-  it('restarts claude with the configured args', () => {
+  it('restarts claude with the configured args', async () => {
     store._set({ ...settings, claudeArgs: '--dangerously-skip-permissions' }, [mkProject()], [
       mkWs({ id: 'a', status: 'active', path: '/wt/proj/a' })
     ])
     fsm.existsSync.mockReturnValue(true)
-    restoreSessions()
+    await restoreSessions()
     expect(ptym.startClaude).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'a', args: '--dangerously-skip-permissions' })
     )
   })
 
-  it('skips workspaces whose project is gone', () => {
+  it('skips workspaces whose project is gone', async () => {
     store._set({ ...settings }, [], [mkWs({ id: 'a', status: 'active', projectId: 'gone' })])
     fsm.existsSync.mockReturnValue(true)
-    restoreSessions()
+    await restoreSessions()
     expect(ptym.startClaude).not.toHaveBeenCalled()
   })
 
-  it('marks a setup left pending (killed by the quit) as failed', () => {
+  it('marks a setup left pending (killed by the quit) as failed', async () => {
     store._set({ ...settings }, [mkProject()], [
       mkWs({ id: 'a', status: 'active', path: '/wt/proj/a', setupStatus: 'pending' }),
       mkWs({ id: 'b', status: 'active', path: '/wt/proj/b', setupStatus: 'success' })
     ])
     fsm.existsSync.mockReturnValue(true)
-    restoreSessions()
+    await restoreSessions()
     expect(store.updateWorkspaceSetupStatus).toHaveBeenCalledWith('a', 'error')
     // A resolved setup is left untouched.
     expect(store.updateWorkspaceSetupStatus).not.toHaveBeenCalledWith('b', expect.anything())
+  })
+})
+
+describe('killWorkspaceProcesses', () => {
+  it('stops the run, kills the PTYs, reaps orphans and returns the count', async () => {
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', path: '/wt/proj/ws' })])
+    reaper.reapWorkspaceProcesses.mockResolvedValueOnce([111, 222])
+    const n = await killWorkspaceProcesses('a')
+    expect(ptym.stopTask).toHaveBeenCalledWith('a')
+    expect(ptym.killWorkspace).toHaveBeenCalledWith('a')
+    expect(reaper.reapWorkspaceProcesses).toHaveBeenCalledWith('/wt/proj/ws')
+    expect(n).toBe(2)
+  })
+
+  it('is a no-op returning 0 for an unknown id', async () => {
+    store._set({ ...settings }, [mkProject()], [])
+    expect(await killWorkspaceProcesses('nope')).toBe(0)
+    expect(ptym.killWorkspace).not.toHaveBeenCalled()
   })
 })
 
@@ -470,6 +501,7 @@ describe('finishArchive', () => {
     await finishArchive('a', onChange)
     expect(ptym.runTask).toHaveBeenCalledWith(expect.objectContaining({ scriptPath: '/arch.sh' }))
     expect(ptym.killWorkspace).toHaveBeenCalledWith('a')
+    expect(reaper.reapWorkspaceProcesses).toHaveBeenCalledWith('/wt/proj/ws')
     expect(git.worktreeRemove).toHaveBeenCalledWith('/repo', '/wt/proj/ws')
     expect(store.updateWorkspaceStatus).toHaveBeenCalledWith('a', 'archived')
     expect(onChange).toHaveBeenCalled()
@@ -503,6 +535,9 @@ describe('restoreWorktree', () => {
     ])
     git.branchExists.mockResolvedValue(true)
     await restoreWorktree('a')
+    // Orphans from a prior instance are reaped before the worktree is re-added,
+    // so a stale test runner can't hold a DB lock and wedge the new setup.
+    expect(reaper.reapWorkspaceProcesses).toHaveBeenCalledWith('/wt/proj/ws')
     expect(git.worktreePrune).toHaveBeenCalled()
     expect(git.worktreeAddExisting).toHaveBeenCalledWith('/repo', '/wt/proj/ws', 'feat')
     expect(git.worktreeAdd).not.toHaveBeenCalled()
@@ -538,6 +573,7 @@ describe('deleteArchivedWorkspace', () => {
     fsm.existsSync.mockReturnValue(true)
     await deleteArchivedWorkspace('a')
     expect(ptym.killWorkspace).toHaveBeenCalledWith('a')
+    expect(reaper.reapWorkspaceProcesses).toHaveBeenCalledWith('/wt/proj/ws')
     expect(git.worktreeRemove).toHaveBeenCalledWith('/repo', '/wt/proj/ws')
     expect(git.branchDelete).toHaveBeenCalledWith('/repo', 'feat')
     expect(store.removeWorkspace).toHaveBeenCalledWith('a')

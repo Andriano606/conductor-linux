@@ -27,6 +27,7 @@ import {
 } from './git'
 import { buildEnv } from './env'
 import { runTask, startClaude, startShell, killWorkspace, stopTask } from './ptyManager'
+import { reapWorkspaceProcesses } from './procReaper'
 
 export function slugify(name: string): string {
   return (
@@ -85,6 +86,9 @@ export async function deleteProject(id: string): Promise<void> {
   if (!project) return
   for (const ws of getWorkspaces().filter((w) => w.projectId === id)) {
     killWorkspace(ws.id)
+    // Also kill any detached orphans (test runners, headless Chrome) the tracked
+    // PTYs left behind, so they don't keep the worktree dir busy or hold ports.
+    await reapWorkspaceProcesses(ws.path)
     if (existsSync(ws.path)) {
       try {
         await worktreeRemove(project.repoPath, ws.path)
@@ -233,7 +237,7 @@ export async function finishSetup(id: string, onChange: () => void): Promise<voi
  * re-start the Claude session for every usable workspace. PTYs live only in
  * memory and are killed on quit, so consoles must be restarted. Idempotent.
  */
-export function restoreSessions(): void {
+export async function restoreSessions(): Promise<void> {
   const settings = getSettings()
   for (const ws of getWorkspaces()) {
     if (ws.status === 'archived') continue
@@ -254,6 +258,12 @@ export function restoreSessions(): void {
     // spinner) so the indicator reflects reality.
     if (ws.setupStatus === 'pending') updateWorkspaceSetupStatus(ws.id, 'error')
     if (!exists) continue
+    // The previous session's PTYs were group-killed on quit, but processes that
+    // detached into their own group (a test run still going, headless Chrome) — or
+    // anything left when the app was closed with the window X — survive. Reap them
+    // BEFORE starting Claude (whose env also carries our marker, so it must not be
+    // running yet) to guarantee each workspace resumes from a clean slate.
+    await reapWorkspaceProcesses(ws.path)
     startClaude({
       id: ws.id,
       cwd: ws.path,
@@ -263,6 +273,23 @@ export function restoreSessions(): void {
       args: settings.claudeArgs
     })
   }
+}
+
+/**
+ * Manually kill EVERY process running in a workspace: its tracked PTYs (Claude,
+ * shell, the run/task script) plus any detached orphan still rooted in the
+ * worktree (background test runners, headless Chrome) that the group-kill misses.
+ * The user-facing "force-clean a stuck workspace" action. Returns how many orphan
+ * pids were reaped beyond the tracked PTYs. Does not change the workspace status —
+ * Claude can be restarted with ensureClaude/restoreSessions afterwards.
+ */
+export async function killWorkspaceProcesses(id: string): Promise<number> {
+  const ws = getWorkspace(id)
+  if (!ws) return 0
+  stopTask(id)
+  killWorkspace(id)
+  const reaped = await reapWorkspaceProcesses(ws.path)
+  return reaped.length
 }
 
 /**
@@ -327,6 +354,9 @@ export async function finishArchive(id: string, onChange: () => void): Promise<v
       })
     }
     killWorkspace(ws.id)
+    // Reap detached orphans before removing the worktree: a background test runner
+    // still chdir'd inside it would otherwise survive and keep its DB/port handles.
+    await reapWorkspaceProcesses(ws.path)
     if (project) await worktreeRemove(project.repoPath, ws.path)
   } catch (err) {
     // Surface the error but still archive the workspace so the UI stays consistent.
@@ -352,7 +382,11 @@ export async function restoreWorktree(id: string): Promise<void> {
   if (!(await isGitRepo(project.repoPath))) {
     throw new Error('Project path is not a git repository. Check the project settings.')
   }
-  // Clean any stale worktree refs / leftover directory before re-adding.
+  // Kill any processes orphaned by a previous instance of this workspace before
+  // re-adding the worktree — a detached test runner left over from the prior run
+  // can hold a DB lock (matched here via its " (deleted)" cwd) and wedge the new
+  // setup script. Then clean stale worktree refs / leftover directory.
+  await reapWorkspaceProcesses(ws.path)
   await worktreePrune(project.repoPath)
   if (existsSync(ws.path)) {
     try {
@@ -379,6 +413,7 @@ export async function deleteArchivedWorkspace(id: string): Promise<void> {
   if (!ws) return
   const project = getProject(ws.projectId)
   killWorkspace(ws.id)
+  await reapWorkspaceProcesses(ws.path)
   if (project && existsSync(ws.path)) {
     try {
       await worktreeRemove(project.repoPath, ws.path)

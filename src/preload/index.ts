@@ -47,6 +47,8 @@ const api = {
     ipcRenderer.invoke('workspace:create', projectId, name, baseBranch, useExistingBranch),
   runWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:run', id),
   stopWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:stop', id),
+  killWorkspaceProcesses: (id: string): Promise<number> =>
+    ipcRenderer.invoke('workspace:killProcesses', id),
   openInBrowser: (id: string): Promise<void> => ipcRenderer.invoke('workspace:openInBrowser', id),
   openInIde: (id: string): Promise<void> => ipcRenderer.invoke('workspace:openInIde', id),
   archiveWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:archive', id),
