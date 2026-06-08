@@ -127,6 +127,24 @@ describe('termRegistry', () => {
     expect(xt.instances[0].scrollToBottom).toHaveBeenCalled()
   })
 
+  it('snaps to the bottom on activation even when previously scrolled up', async () => {
+    const id = freshId()
+    writeData(id, 'claude', '')
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    mount(host, id, 'claude')
+    await nextFrame()
+    const term = xt.instances[0]
+    // User scrolled up, then re-activates this tab: viewport not at the bottom,
+    // so fitAndResize's pin-to-bottom path won't fire — mount must still snap.
+    term.buffer.active.baseY = 500
+    term.buffer.active.viewportY = 100
+    term.scrollToBottom.mockClear()
+    mount(host, id, 'claude')
+    await nextFrame()
+    expect(term.scrollToBottom).toHaveBeenCalled()
+  })
+
   it('does not yank the view to the bottom when scrolled up', async () => {
     const id = freshId()
     writeData(id, 'claude', '')

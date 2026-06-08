@@ -149,6 +149,9 @@ export function mount(host: HTMLElement, id: string, kind: PtyKind): void {
   // Focus only on activation — fitAndResize must not steal focus on every resize.
   requestAnimationFrame(() => {
     fitAndResize(id, kind)
+    // Snap to the latest output whenever a tab/workspace is activated, so the
+    // user always lands at the bottom rather than wherever they last scrolled.
+    e.term.scrollToBottom()
     e.term.focus()
   })
 }
