@@ -27,7 +27,7 @@ describe('ArchivedModal', () => {
   it('deletes only after confirmation', async () => {
     useStore.setState({ workspaces: [mkWs({ id: 'a', name: 'old', status: 'archived' })] })
     render(<ArchivedModal />)
-    fireEvent.click(screen.getByText(/Видалити/))
+    fireEvent.click(screen.getByText('🗑 Видалити'))
     // A confirmation is pending; nothing deleted yet.
     expect(api.deleteWorkspace).not.toHaveBeenCalled()
     expect(useStore.getState().confirmRequest).not.toBeNull()
@@ -40,7 +40,43 @@ describe('ArchivedModal', () => {
   it('does not delete when confirmation is cancelled', async () => {
     useStore.setState({ workspaces: [mkWs({ id: 'a', name: 'old', status: 'archived' })] })
     render(<ArchivedModal />)
-    fireEvent.click(screen.getByText(/Видалити/))
+    fireEvent.click(screen.getByText('🗑 Видалити'))
+    await act(async () => {
+      useStore.getState().resolveConfirm(false)
+    })
+    expect(api.deleteWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('has no "delete all" button when the archive is empty', () => {
+    render(<ArchivedModal />)
+    expect(screen.queryByText('🗑 Видалити всі')).not.toBeInTheDocument()
+  })
+
+  it('deletes every archived workspace after confirming "delete all"', async () => {
+    useStore.setState({
+      workspaces: [
+        mkWs({ id: 'a', name: 'old-a', status: 'archived' }),
+        mkWs({ id: 'b', name: 'old-b', status: 'archived' }),
+        mkWs({ id: 'c', name: 'live', status: 'active' })
+      ]
+    })
+    render(<ArchivedModal />)
+    fireEvent.click(screen.getByText('🗑 Видалити всі'))
+    expect(api.deleteWorkspace).not.toHaveBeenCalled()
+    await act(async () => {
+      useStore.getState().resolveConfirm(true)
+    })
+    expect(api.deleteWorkspace).toHaveBeenCalledWith('a')
+    expect(api.deleteWorkspace).toHaveBeenCalledWith('b')
+    // The active workspace is untouched.
+    expect(api.deleteWorkspace).not.toHaveBeenCalledWith('c')
+    expect(api.deleteWorkspace).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not delete all when confirmation is cancelled', async () => {
+    useStore.setState({ workspaces: [mkWs({ id: 'a', name: 'old', status: 'archived' })] })
+    render(<ArchivedModal />)
+    fireEvent.click(screen.getByText('🗑 Видалити всі'))
     await act(async () => {
       useStore.getState().resolveConfirm(false)
     })

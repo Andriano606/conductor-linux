@@ -12,16 +12,30 @@ export function ArchivedModal(): JSX.Element {
     }
   }
 
+  const removeAll = async (): Promise<void> => {
+    if (
+      await askConfirm(
+        `Видалити всі архівовані воркспейси (${archived.length}) назавжди? Гілки git буде видалено — це незворотно.`
+      )
+    ) {
+      for (const w of archived) void deleteWorkspace(w.id)
+    }
+  }
+
   return (
     <div className="modal-backdrop" onClick={() => openArchived(false)}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 520 }}>
+      <div
+        className="modal archived-modal"
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: 520 }}
+      >
         <h2>Архівовані воркспейси</h2>
         {error && <div className="err">{error}</div>}
-        {archived.length === 0 ? (
-          <div className="hint">Архів порожній.</div>
-        ) : (
-          <div className="archived-list">
-            {archived.map((w) => (
+        <div className="archived-list">
+          {archived.length === 0 ? (
+            <div className="hint">Архів порожній.</div>
+          ) : (
+            archived.map((w) => (
               <div className="archived-item" key={w.id}>
                 <div className="info">
                   <div className="name">{w.name}</div>
@@ -40,10 +54,19 @@ export function ArchivedModal(): JSX.Element {
                   </button>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
+            ))
+          )}
+        </div>
         <div className="modal-actions">
+          {archived.length > 0 && (
+            <button
+              className="btn danger"
+              style={{ marginRight: 'auto' }}
+              onClick={() => void removeAll()}
+            >
+              🗑 Видалити всі
+            </button>
+          )}
           <button className="btn" onClick={() => openArchived(false)}>
             Закрити
           </button>

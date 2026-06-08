@@ -729,11 +729,18 @@ button {
   color: var(--text);
 }
 
+.archived-modal {
+  display: flex;
+  flex-direction: column;
+  height: 70vh;
+  overflow: hidden;
+}
 .archived-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 50vh;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 .archived-item {
