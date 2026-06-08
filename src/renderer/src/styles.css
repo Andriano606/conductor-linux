@@ -268,30 +268,120 @@ button {
   font-weight: 600;
   margin-right: auto;
   min-width: 0;
-  overflow: hidden;
+  /* NOT overflow:hidden — that clips the branch popups. The workspace-name
+     ellipsis lives on .title-main, which has its own overflow:hidden. */
+  overflow: visible;
 }
 .toolbar .title-main {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.toolbar .title small {
-  color: var(--text-dim);
-  font-weight: 400;
-  margin-left: 8px;
-}
 .toolbar .branch-info {
-  margin-top: 2px;
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   font-size: 12px;
-  font-weight: 400;
-  color: var(--text-dim);
   font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
-  white-space: nowrap;
+}
+.toolbar .branch-badge-wrap {
+  position: relative;
+  display: inline-flex;
+}
+/* Branch chips: capped to 15 chars in JS, rendered as small rounded pills.
+   Hover pops the full name; click copies it and flashes a green confirmation. */
+.toolbar .branch-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+  line-height: 1.5;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+.toolbar .branch-badge:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-3));
+}
+.toolbar .branch-badge:active {
+  transform: translateY(1px);
+}
+.toolbar .branch-badge .bb-icon {
+  color: var(--text-dim);
+}
+.toolbar .branch-badge.from .bb-icon {
+  color: var(--accent);
+}
+.toolbar .branch-badge .bb-name {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.toolbar .branch-info .from {
+
+/* Popup shared by hover (full name) and the copied confirmation. */
+.toolbar .branch-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 60vw;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-3);
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
+  animation: branch-pop-in 0.12s ease;
+}
+.toolbar .branch-pop .bb-pop-label {
+  color: var(--text-dim);
+}
+.toolbar .branch-pop code {
   color: var(--accent);
+  font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+}
+.toolbar .branch-pop.copied {
+  border-color: var(--green);
+  color: var(--green);
+  font-weight: 600;
+}
+.toolbar .branch-pop .bb-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--green);
+  color: var(--bg);
+  font-size: 11px;
+  font-weight: 700;
+}
+@keyframes branch-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .tabs {

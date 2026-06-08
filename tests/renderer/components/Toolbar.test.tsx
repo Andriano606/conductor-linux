@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Toolbar } from '../../../src/renderer/src/components/Toolbar'
 import { useStore } from '../../../src/renderer/src/store'
@@ -45,6 +45,34 @@ describe('Toolbar', () => {
     api.currentBranch.mockResolvedValue('feature/login')
     render(<Toolbar ws={ws} />)
     await waitFor(() => expect(screen.getByText(/feature\/login/)).toBeInTheDocument())
+  })
+
+  it('truncates a long branch name to 15 chars and hides the full name until hover', async () => {
+    api.currentBranch.mockResolvedValue('feature/super-long-branch')
+    render(<Toolbar ws={ws} />)
+    await waitFor(() => expect(screen.getByText('feature/super-…')).toBeInTheDocument())
+    expect(screen.queryByText('feature/super-long-branch')).not.toBeInTheDocument()
+  })
+
+  it('reveals the full branch name in a popup on hover', async () => {
+    api.currentBranch.mockResolvedValue('feature/super-long-branch')
+    render(<Toolbar ws={ws} />)
+    const badge = await screen.findByText('feature/super-…')
+    fireEvent.mouseEnter(badge.closest('button')!)
+    expect(screen.getByText('feature/super-long-branch')).toBeInTheDocument()
+    fireEvent.mouseLeave(badge.closest('button')!)
+    expect(screen.queryByText('feature/super-long-branch')).not.toBeInTheDocument()
+  })
+
+  it('copies the full branch name and flashes a confirmation on click', async () => {
+    const writeText = vi.fn()
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    api.currentBranch.mockResolvedValue('feature/super-long-branch')
+    render(<Toolbar ws={ws} />)
+    const badge = await screen.findByText('feature/super-…')
+    fireEvent.click(badge.closest('button')!)
+    expect(writeText).toHaveBeenCalledWith('feature/super-long-branch')
+    expect(screen.getByText(/Скопійовано/)).toBeInTheDocument()
   })
 
   it('switches tabs via setKind', () => {
