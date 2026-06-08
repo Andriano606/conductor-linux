@@ -173,6 +173,69 @@ describe('termRegistry', () => {
     writeData(id, 'claude', '')
     expect(xt.instances).toHaveLength(4)
   })
+
+  // The custom key handler installed for the interactive terminals.
+  const ctrlC = { type: 'keydown', ctrlKey: true, key: 'c' } as unknown as KeyboardEvent
+  const handlerOf = (term: FakeTerminal): ((e: KeyboardEvent) => boolean) =>
+    term.attachCustomKeyEventHandler.mock.calls[0][0]
+
+  it('Ctrl+C copies the selection in every interactive terminal', () => {
+    for (const kind of ['claude', 'shell'] as const) {
+      const id = freshId()
+      writeData(id, kind, '')
+      const term = xt.instances.at(-1) as FakeTerminal
+      term.getSelection.mockReturnValue('picked')
+      // Selection present → copy and swallow; never send an interrupt.
+      expect(handlerOf(term)(ctrlC)).toBe(false)
+      expect(api.copyText).toHaveBeenCalledWith('picked')
+      expect(api.sendInput).not.toHaveBeenCalledWith(id, kind, '\x03')
+    }
+  })
+
+  it('Ctrl+C interrupts Claude but throttles rapid taps so it cannot exit', () => {
+    const now = vi.spyOn(performance, 'now')
+    const id = freshId()
+    writeData(id, 'claude', '')
+    const term = xt.instances.at(-1) as FakeTerminal
+    const handle = handlerOf(term)
+
+    // First press → a single \x03 (interrupt), always swallowed. (performance.now
+    // is always well past 1s by the time a key is pressed, so the first ever tap
+    // is never throttled.)
+    now.mockReturnValue(5000)
+    expect(handle(ctrlC)).toBe(false)
+    expect(api.sendInput).toHaveBeenCalledWith(id, 'claude', '\x03')
+    expect(api.sendInput).toHaveBeenCalledTimes(1)
+
+    // A second press inside the 1s window — the CLI's double-tap exit — is dropped.
+    now.mockReturnValue(5500)
+    expect(handle(ctrlC)).toBe(false)
+    expect(api.sendInput).toHaveBeenCalledTimes(1)
+
+    // Past the window, Ctrl+C interrupts again.
+    now.mockReturnValue(6000)
+    expect(handle(ctrlC)).toBe(false)
+    expect(api.sendInput).toHaveBeenCalledTimes(2)
+    now.mockRestore()
+  })
+
+  it('Ctrl+C in the shell falls through to a normal interrupt', () => {
+    const id = freshId()
+    writeData(id, 'shell', '')
+    const term = xt.instances.at(-1) as FakeTerminal
+    // No selection → let xterm emit its own \x03 (return true), no throttle and
+    // no direct send, so the shell behaves like a real terminal.
+    expect(handlerOf(term)(ctrlC)).toBe(true)
+    expect(api.sendInput).not.toHaveBeenCalled()
+  })
+
+  it('does not intercept keys other than Ctrl+C', () => {
+    const id = freshId()
+    writeData(id, 'claude', '')
+    const term = xt.instances.at(-1) as FakeTerminal
+    const plain = { type: 'keydown', ctrlKey: false, key: 'a' } as unknown as KeyboardEvent
+    expect(handlerOf(term)(plain)).toBe(true)
+  })
 })
 
 type FakeTerminal = InstanceType<typeof xt.FakeTerminal>

@@ -68,6 +68,36 @@ function ensure(id: string, kind: PtyKind): TermEntry {
 
   if (!readOnly) {
     term.onData((d) => window.api.sendInput(id, kind, d))
+
+    // Ctrl+C handling for the interactive terminals (claude + shell):
+    //  - If text is selected, Ctrl+C copies it (a real terminal convention) —
+    //    this works in every tab, not just Claude.
+    //  - Otherwise it interrupts. In the shell that's the normal \x03. In the
+    //    Claude terminal a single press interrupts the current generation, but a
+    //    quick *double* press is how the `claude` CLI exits — closing the
+    //    console out from under the user. We never want Ctrl+C to close Claude,
+    //    so we forward a single throttled \x03 that can't reach Claude's
+    //    double-tap exit window.
+    let lastSigint = 0
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type !== 'keydown' || !ev.ctrlKey || (ev.key !== 'c' && ev.key !== 'C')) {
+        return true
+      }
+      const sel = term.getSelection()
+      if (sel) {
+        window.api.copyText(sel)
+        return false
+      }
+      if (kind !== 'claude') return true // shell: let xterm emit \x03 normally
+      const now = performance.now()
+      if (now - lastSigint >= 1000) {
+        lastSigint = now
+        window.api.sendInput(id, kind, '\x03')
+      }
+      // Always swallow for Claude: returning true would let xterm emit its own
+      // \x03 and bypass the throttle, re-enabling the double-tap exit.
+      return false
+    })
   } else {
     // View-only terminal (task output): let the user select & copy text, but
     // never send keystrokes to the PTY so the running process is untouched.
