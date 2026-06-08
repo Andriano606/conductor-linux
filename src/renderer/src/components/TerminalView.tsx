@@ -10,11 +10,21 @@ export function TerminalView({ id, kind }: { id: string; kind: PtyKind }): JSX.E
     if (!host) return
     mount(host, id, kind)
 
-    const onResize = (): void => fitAndResize(id, kind)
+    // Coalesce resize bursts to one fit per frame so a fit→layout→observer-fires
+    // feedback loop can't pile up while output is streaming.
+    let raf = 0
+    const onResize = (): void => {
+      if (raf) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        fitAndResize(id, kind)
+      })
+    }
     window.addEventListener('resize', onResize)
     const observer = new ResizeObserver(onResize)
     observer.observe(host)
     return () => {
+      if (raf) cancelAnimationFrame(raf)
       window.removeEventListener('resize', onResize)
       observer.disconnect()
     }

@@ -6,6 +6,9 @@ interface TermEntry {
   wrapper: HTMLDivElement
   term: Terminal
   fit: FitAddon
+  // Live streaming is held back until the initial buffer snapshot has been
+  // written, so the snapshot can never land after the data that follows it.
+  attached: boolean
 }
 
 /**
@@ -83,19 +86,58 @@ function ensure(id: string, kind: PtyKind): TermEntry {
     })
   }
 
-  e = { wrapper, term, fit }
+  e = { wrapper, term, fit, attached: false }
   terms.set(k, e)
 
   // Attach atomically in main: returns the buffer snapshot, then live streaming begins.
   window.api.attachPty(id, kind).then((buf) => {
     if (buf) term.write(buf)
+    e!.attached = true
+    // Flush any live chunks that arrived (and were queued) before the snapshot.
+    scheduleFlush()
   })
   return e
 }
 
+// Incoming pty chunks are coalesced per terminal and flushed in a single
+// term.write() per animation frame. Hundreds of tiny synchronous writes during
+// a log burst otherwise thrash the renderer and make the console stutter.
+const pending = new Map<string, string>()
+let flushScheduled = false
+
+function scheduleFlush(): void {
+  if (flushScheduled) return
+  flushScheduled = true
+  requestAnimationFrame(flush)
+}
+
+function flush(): void {
+  flushScheduled = false
+  let requeued = false
+  for (const [k, data] of pending) {
+    const e = terms.get(k)
+    if (!e) {
+      pending.delete(k)
+      continue
+    }
+    // Hold the terminal's data until its snapshot has been written (ordering).
+    if (!e.attached) {
+      requeued = true
+      continue
+    }
+    e.term.write(data)
+    pending.delete(k)
+  }
+  // Some entries still await their snapshot; try again next frame.
+  if (requeued) scheduleFlush()
+}
+
 /** Route incoming pty data to the matching terminal (creating it if needed). */
 export function writeData(id: string, kind: PtyKind, data: string): void {
-  ensure(id, kind).term.write(data)
+  ensure(id, kind)
+  const k = key(id, kind)
+  pending.set(k, (pending.get(k) ?? '') + data)
+  scheduleFlush()
 }
 
 /** Mount the given terminal into the host element and size it to fit. */
@@ -104,16 +146,28 @@ export function mount(host: HTMLElement, id: string, kind: PtyKind): void {
   if (e.wrapper.parentElement !== host) {
     host.replaceChildren(e.wrapper)
   }
-  requestAnimationFrame(() => fitAndResize(id, kind))
+  // Focus only on activation — fitAndResize must not steal focus on every resize.
+  requestAnimationFrame(() => {
+    fitAndResize(id, kind)
+    e.term.focus()
+  })
 }
 
 export function fitAndResize(id: string, kind: PtyKind): void {
   const e = terms.get(key(id, kind))
   if (!e || !e.wrapper.isConnected) return
   try {
+    // Keep the view pinned to the bottom across a reflow: an xterm resize can
+    // otherwise strand the viewport at the top mid-stream ("teleport").
+    const b = e.term.buffer.active
+    const wasAtBottom = b.viewportY >= b.baseY
+    const prevCols = e.term.cols
+    const prevRows = e.term.rows
     e.fit.fit()
-    window.api.resizePty(id, kind, e.term.cols, e.term.rows)
-    e.term.focus()
+    if (e.term.cols !== prevCols || e.term.rows !== prevRows) {
+      window.api.resizePty(id, kind, e.term.cols, e.term.rows)
+    }
+    if (wasAtBottom) e.term.scrollToBottom()
   } catch {
     /* element not measurable yet */
   }
@@ -127,6 +181,7 @@ export function disposeWorkspace(id: string): void {
       e.term.dispose()
       e.wrapper.remove()
       terms.delete(k)
+      pending.delete(k)
     }
   }
 }

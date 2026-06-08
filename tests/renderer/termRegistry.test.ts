@@ -11,7 +11,11 @@ const xt = vi.hoisted(() => {
     write = vi.fn()
     focus = vi.fn()
     dispose = vi.fn()
-    loadAddon = vi.fn()
+    scrollToBottom = vi.fn()
+    buffer = { active: { viewportY: 0, baseY: 0 } }
+    loadAddon = vi.fn((addon: FakeFitAddon) => {
+      addon.term = this
+    })
     open = vi.fn()
     onData = vi.fn()
     onSelectionChange = vi.fn()
@@ -23,7 +27,15 @@ const xt = vi.hoisted(() => {
     }
   }
   class FakeFitAddon {
-    fit = vi.fn()
+    term?: FakeTerminal
+    // A real fit() measures the host and resizes the terminal; emulate that by
+    // bumping the terminal to a new size so the dims-changed guard fires.
+    fit = vi.fn(() => {
+      if (this.term) {
+        this.term.cols = 120
+        this.term.rows = 40
+      }
+    })
   }
   return { instances, FakeTerminal, FakeFitAddon }
 })
@@ -49,6 +61,11 @@ beforeEach(() => {
 let counter = 0
 const freshId = (): string => `ws-${counter++}`
 
+// Streaming writes are coalesced and flushed one frame later (after the attach
+// snapshot resolves), so tests await a frame before asserting on writes.
+const nextFrame = (): Promise<void> =>
+  new Promise((r) => requestAnimationFrame(() => r()))
+
 describe('termRegistry', () => {
   it('creates one terminal per (id, kind) and reuses it', () => {
     const id = freshId()
@@ -69,9 +86,12 @@ describe('termRegistry', () => {
     expect(xt.instances[1].onData).toHaveBeenCalled()
   })
 
-  it('routes data to the matching terminal', () => {
+  it('routes data to the matching terminal (batched per frame)', async () => {
     const id = freshId()
-    writeData(id, 'claude', 'hello')
+    writeData(id, 'claude', 'hel')
+    writeData(id, 'claude', 'lo')
+    await nextFrame()
+    // Both chunks coalesce into a single write once the snapshot has landed.
     expect(xt.instances[0].write).toHaveBeenCalledWith('hello')
   })
 
@@ -84,21 +104,43 @@ describe('termRegistry', () => {
     expect(xt.instances[0].write).toHaveBeenCalledWith('history-buffer')
   })
 
-  it('mount places the wrapper in the host; fitAndResize no-ops when detached', () => {
+  it('mount places the wrapper in the host and focuses/resizes on activation', async () => {
     const id = freshId()
     // Created but not mounted → wrapper not connected → fitAndResize is a no-op.
     writeData(id, 'claude', '')
     fitAndResize(id, 'claude')
     expect(api.resizePty).not.toHaveBeenCalled()
+    // Background resize does not steal focus.
+    expect(xt.instances[0].focus).not.toHaveBeenCalled()
 
     const host = document.createElement('div')
     document.body.appendChild(host)
     mount(host, id, 'claude')
     expect(host.querySelector('.term-mount')).not.toBeNull()
 
-    fitAndResize(id, 'claude')
+    // mount defers fit + focus to the next frame.
+    await nextFrame()
     expect(xt.instances[0].focus).toHaveBeenCalled()
-    expect(api.resizePty).toHaveBeenCalledWith(id, 'claude', 80, 24)
+    // fit() changed the dims (80→120) so the new size is pushed to the PTY.
+    expect(api.resizePty).toHaveBeenCalledWith(id, 'claude', 120, 40)
+    // The view was at the bottom, so it stays pinned after the reflow.
+    expect(xt.instances[0].scrollToBottom).toHaveBeenCalled()
+  })
+
+  it('does not yank the view to the bottom when scrolled up', async () => {
+    const id = freshId()
+    writeData(id, 'claude', '')
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    mount(host, id, 'claude')
+    await nextFrame()
+    // Simulate the user scrolling up: viewport no longer at the bottom.
+    const term = xt.instances[0]
+    term.buffer.active.baseY = 500
+    term.buffer.active.viewportY = 100
+    term.scrollToBottom.mockClear()
+    fitAndResize(id, 'claude')
+    expect(term.scrollToBottom).not.toHaveBeenCalled()
   })
 
   it('disposeWorkspace tears down all three kinds', () => {
