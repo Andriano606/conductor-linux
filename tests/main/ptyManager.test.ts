@@ -266,28 +266,102 @@ describe('killWorkspace & killAll', () => {
 })
 
 describe('claude working indicator', () => {
-  it('emits busy:true on output and busy:false after the idle gap', () => {
+  // Claude's TUI shows "(esc to interrupt)" in its status line only while it is
+  // actively running; that marker — not raw output — drives the spinner.
+  const WORKING = '✻ Thinking… (3s · esc to interrupt)'
+
+  it('emits busy:true on the working marker and busy:false after the idle gap', () => {
     vi.useFakeTimers()
     startClaude({ id: 'w1', ...baseOpts })
-    last().emitData('✻ Thinking…')
+    last().emitData(WORKING)
     expect(send).toHaveBeenCalledWith('claude:busy', { id: 'w1', busy: true })
     send.mockClear()
-    // Continued output inside the idle window does not re-emit busy:true.
-    last().emitData(' more tokens')
+    // A repeated marker frame inside the idle window does not re-emit busy:true.
+    last().emitData(WORKING)
     expect(send).not.toHaveBeenCalledWith('claude:busy', { id: 'w1', busy: true })
-    // After a quiet gap it flips to idle.
-    vi.advanceTimersByTime(900)
+    // After the marker stops refreshing it flips to idle.
+    vi.advanceTimersByTime(2100)
     expect(send).toHaveBeenCalledWith('claude:busy', { id: 'w1', busy: false })
     vi.useRealTimers()
   })
 
-  it('flips back to busy when output resumes after going idle', () => {
+  it('does not mark busy for output without the working marker', () => {
     vi.useFakeTimers()
     startClaude({ id: 'w1', ...baseOpts })
-    last().emitData('a')
-    vi.advanceTimersByTime(900)
+    // Startup banner / idle prompt redraw / cursor blink — no marker.
+    last().emitData('✻ Welcome to Claude Code')
+    last().emitData('\x1b[2J\x1b[H│ > ')
+    vi.advanceTimersByTime(2100)
+    expect(send).not.toHaveBeenCalledWith('claude:busy', { id: 'w1', busy: true })
+    vi.useRealTimers()
+  })
+
+  it('detects the marker even when split across two reads', () => {
+    vi.useFakeTimers()
+    startClaude({ id: 'w1', ...baseOpts })
+    last().emitData('… (3s · esc to inter')
+    last().emitData('rupt)')
+    expect(send).toHaveBeenCalledWith('claude:busy', { id: 'w1', busy: true })
+    vi.useRealTimers()
+  })
+
+  it('detects the real status line where word gaps are cursor-move escapes', () => {
+    // Claude renders "esc to interrupt" as "esc\x1b[7Gto\x1b[10Ginterrupt" — the
+    // gaps are cursor moves, not spaces, so after stripping the words collapse.
+    vi.useFakeTimers()
+    startClaude({ id: 'w1', ...baseOpts })
+    last().emitData('\x1b[38;2;153;153;153mesc\x1b[7Gto\x1b[10Ginterrupt\x1b[0m')
+    expect(send).toHaveBeenCalledWith('claude:busy', { id: 'w1', busy: true })
+    vi.useRealTimers()
+  })
+
+  it('detects the marker through ANSI color codes', () => {
+    vi.useFakeTimers()
+    startClaude({ id: 'w1', ...baseOpts })
+    last().emitData('\x1b[2m(esc to interrupt)\x1b[0m')
+    expect(send).toHaveBeenCalledWith('claude:busy', { id: 'w1', busy: true })
+    vi.useRealTimers()
+  })
+
+  it('stays busy through a blocking command via the spinner glyph', () => {
+    // While a tool/command runs, the "esc to interrupt" line stops repainting for
+    // seconds, but the spinner glyph keeps animating — it must keep busy alive.
+    vi.useFakeTimers()
+    startClaude({ id: 'w1', ...baseOpts })
+    last().emitData(WORKING)
     send.mockClear()
-    last().emitData('b')
+    // Marker silent, only the spinner refreshes — longer than one idle window.
+    for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(700)
+      last().emitData('\x1b[2K✻\x1b[1G')
+    }
+    vi.advanceTimersByTime(1500)
+    expect(send).not.toHaveBeenCalledWith('claude:busy', { id: 'w1', busy: false })
+    // Once the spinner also stops, it finally flips to idle.
+    vi.advanceTimersByTime(2100)
+    expect(send).toHaveBeenCalledWith('claude:busy', { id: 'w1', busy: false })
+    vi.useRealTimers()
+  })
+
+  it('does not turn busy on from a spinner glyph alone (banner)', () => {
+    // The "✻ Welcome" banner carries a spinner glyph but no interrupt marker; a
+    // glyph may only sustain an already-on indicator, never start one.
+    vi.useFakeTimers()
+    startClaude({ id: 'w1', ...baseOpts })
+    last().emitData('✻ Welcome to Claude Code')
+    last().emitData('⠂ booting')
+    vi.advanceTimersByTime(2100)
+    expect(send).not.toHaveBeenCalledWith('claude:busy', { id: 'w1', busy: true })
+    vi.useRealTimers()
+  })
+
+  it('flips back to busy when the marker reappears after going idle', () => {
+    vi.useFakeTimers()
+    startClaude({ id: 'w1', ...baseOpts })
+    last().emitData(WORKING)
+    vi.advanceTimersByTime(2100)
+    send.mockClear()
+    last().emitData(WORKING)
     expect(send).toHaveBeenCalledWith('claude:busy', { id: 'w1', busy: true })
     vi.useRealTimers()
   })
@@ -295,7 +369,7 @@ describe('claude working indicator', () => {
   it('clears busy when the claude session exits', () => {
     vi.useFakeTimers()
     startClaude({ id: 'w1', ...baseOpts })
-    last().emitData('x')
+    last().emitData(WORKING)
     send.mockClear()
     last().emitExit(0)
     expect(send).toHaveBeenCalledWith('claude:busy', { id: 'w1', busy: false })
@@ -304,7 +378,7 @@ describe('claude working indicator', () => {
 
   it('does not track busy for task output', () => {
     void runTask({ id: 'w1', scriptPath: '/r.sh', label: 'run', ...baseOpts })
-    last().emitData('building…')
+    last().emitData('building… (esc to interrupt)')
     expect(send).not.toHaveBeenCalledWith('claude:busy', expect.anything())
   })
 })

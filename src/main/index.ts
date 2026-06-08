@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, Menu, shell } from 'electron'
 import { join } from 'path'
 import { initStore } from './store'
 import { registerIpc } from './ipc'
@@ -37,6 +37,8 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  // Remove the native menu bar entirely so it never flickers in (Alt-toggle etc.)
+  Menu.setApplicationMenu(null)
   initStore()
   registerIpc()
   restoreSessions()

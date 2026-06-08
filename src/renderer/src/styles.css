@@ -209,8 +209,30 @@ button {
   flex-shrink: 0;
   animation: spin 0.7s linear infinite;
 }
+/* Animated Claude "spark" logo shown while Claude is working. */
 .ind-claude {
-  border-top-color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #d97757; /* Claude brand orange */
+  flex-shrink: 0;
+  animation: claude-pulse 1.5s ease-in-out infinite;
+}
+.ind-claude svg {
+  display: block;
+  transform-origin: center;
+  animation: spin 2.6s linear infinite;
+}
+@keyframes claude-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 @keyframes pulse {
   0% {
