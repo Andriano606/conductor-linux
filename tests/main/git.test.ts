@@ -8,6 +8,7 @@ import {
   branchDelete,
   branchExists,
   currentBranch,
+  fastForwardToRemote,
   isGitRepo,
   listBranches,
   worktreeAdd,
@@ -179,5 +180,66 @@ describe('listBranches (with a remote)', () => {
     // Remote-tracking refs are excluded from localBranches.
     expect(localBranches).toContain('main')
     expect(localBranches).not.toContain('origin/main')
+  })
+})
+
+describe('fastForwardToRemote', () => {
+  let remote: string
+  let wt: string
+  const headSha = (dir: string, ref: string): string =>
+    execFileSync('git', ['-C', dir, 'rev-parse', ref], { encoding: 'utf8' }).trim()
+
+  beforeEach(() => {
+    remote = mkdtempSync(join(tmpdir(), 'conductor-remote-'))
+    execFileSync('git', ['init', '--bare', '-q', remote])
+    execFileSync('git', ['-C', repo.dir, 'remote', 'add', 'origin', remote])
+    execFileSync('git', ['-C', repo.dir, 'push', '-q', 'origin', 'main'])
+    wt = wtPath('wt-ff')
+  })
+  afterEach(() => rmSync(remote, { recursive: true, force: true }))
+
+  it('advances a behind branch to origin/<branch> and returns true', async () => {
+    // Push 'shared', then move origin/shared one commit ahead of the local ref.
+    execFileSync('git', ['-C', repo.dir, 'branch', 'shared'])
+    execFileSync('git', ['-C', repo.dir, 'push', '-q', 'origin', 'shared'])
+    const c1 = headSha(repo.dir, 'shared')
+    execFileSync('git', ['-C', repo.dir, 'switch', '-q', 'shared'])
+    repo.commit('remote-only.txt', 'x', 'remote commit')
+    execFileSync('git', ['-C', repo.dir, 'push', '-q', 'origin', 'shared'])
+    execFileSync('git', ['-C', repo.dir, 'switch', '-q', 'main'])
+    execFileSync('git', ['-C', repo.dir, 'branch', '-f', 'shared', c1]) // rewind local
+
+    await worktreeAddExisting(repo.dir, wt, 'shared')
+    expect(existsSync(join(wt, 'remote-only.txt'))).toBe(false)
+    expect(await fastForwardToRemote(wt, 'shared')).toBe(true)
+    expect(existsSync(join(wt, 'remote-only.txt'))).toBe(true)
+  })
+
+  it('is a no-op (false) for a branch with no remote-tracking ref', async () => {
+    repo.branch('local-only')
+    await worktreeAddExisting(repo.dir, wt, 'local-only')
+    expect(await fastForwardToRemote(wt, 'local-only')).toBe(false)
+  })
+
+  it('does not fast-forward a diverged branch and returns false', async () => {
+    execFileSync('git', ['-C', repo.dir, 'branch', 'div'])
+    execFileSync('git', ['-C', repo.dir, 'push', '-q', 'origin', 'div'])
+    const c1 = headSha(repo.dir, 'div')
+    // origin/div gets one commit...
+    execFileSync('git', ['-C', repo.dir, 'switch', '-q', 'div'])
+    repo.commit('remote.txt', 'r', 'remote commit')
+    execFileSync('git', ['-C', repo.dir, 'push', '-q', 'origin', 'div'])
+    // ...local div gets a DIFFERENT commit on top of c1 → diverged.
+    execFileSync('git', ['-C', repo.dir, 'switch', '-q', 'main'])
+    execFileSync('git', ['-C', repo.dir, 'branch', '-f', 'div', c1])
+    execFileSync('git', ['-C', repo.dir, 'switch', '-q', 'div'])
+    repo.commit('local.txt', 'l', 'local commit')
+    execFileSync('git', ['-C', repo.dir, 'switch', '-q', 'main'])
+
+    await worktreeAddExisting(repo.dir, wt, 'div')
+    expect(await fastForwardToRemote(wt, 'div')).toBe(false)
+    // Local commit kept; the remote commit was not merged in.
+    expect(existsSync(join(wt, 'local.txt'))).toBe(true)
+    expect(existsSync(join(wt, 'remote.txt'))).toBe(false)
   })
 })

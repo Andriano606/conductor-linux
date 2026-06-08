@@ -46,6 +46,8 @@ vi.mock('../../src/main/store', () => store)
 const git = vi.hoisted(() => ({
   isGitRepo: vi.fn(async () => true),
   branchExists: vi.fn(async () => false),
+  fetchQuiet: vi.fn(async () => {}),
+  fastForwardToRemote: vi.fn(async () => false),
   worktreeAdd: vi.fn(async () => {}),
   worktreeAddExisting: vi.fn(async () => {}),
   worktreePrune: vi.fn(async () => {}),
@@ -244,6 +246,13 @@ describe('createWorkspace happy path', () => {
     expect(store.addWorkspace).toHaveBeenCalledWith(ws)
   })
 
+  it('refreshes remote-tracking refs before cutting the new branch', async () => {
+    await createWorkspace('p1', 'feature-fresh', 'origin/main')
+    expect(git.fetchQuiet).toHaveBeenCalledWith('/repo')
+    // The new-branch flow does not fast-forward — it cuts straight from the base ref.
+    expect(git.fastForwardToRemote).not.toHaveBeenCalled()
+  })
+
   it('leaves baseBranch undefined when not given', async () => {
     const ws = await createWorkspace('p1', 'feature-y')
     expect(ws.baseBranch).toBeUndefined()
@@ -266,6 +275,9 @@ describe('createWorkspace with an existing branch', () => {
     expect(ws.baseBranch).toBeUndefined()
     expect(git.worktreeAddExisting).toHaveBeenCalledWith('/repo', '/wt/proj/feature-x', 'feature-x')
     expect(git.worktreeAdd).not.toHaveBeenCalled()
+    // The checked-out branch is fast-forwarded to its remote so it isn't stale.
+    expect(git.fetchQuiet).toHaveBeenCalledWith('/repo')
+    expect(git.fastForwardToRemote).toHaveBeenCalledWith('/wt/proj/feature-x', 'feature-x')
   })
 
   it('throws when the selected branch does not exist', async () => {

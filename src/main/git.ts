@@ -10,7 +10,7 @@ const run = promisify(execFile)
  * branch loader) would hang forever. We resolve after a hard deadline and kill
  * the process regardless, then fall back to the refs already on disk.
  */
-function fetchQuiet(repoPath: string): Promise<void> {
+export function fetchQuiet(repoPath: string): Promise<void> {
   return new Promise((resolve) => {
     let done = false
     const finish = (): void => {
@@ -139,6 +139,34 @@ export async function worktreeAddExisting(
   branch: string
 ): Promise<void> {
   await run('git', ['-C', repoPath, 'worktree', 'add', wtPath, branch])
+}
+
+/**
+ * Fast-forward a worktree's checked-out branch to its remote-tracking counterpart
+ * (origin/<branch>). Best effort: does nothing when there is no origin/<branch>
+ * ref or when the branch has diverged (a non-fast-forward), leaving the worktree
+ * untouched rather than risking a merge commit or conflict. Pairs with a prior
+ * fetchQuiet so the remote-tracking ref is fresh. Returns true if it advanced.
+ */
+export async function fastForwardToRemote(wtPath: string, branch: string): Promise<boolean> {
+  try {
+    await run('git', [
+      '-C',
+      wtPath,
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `refs/remotes/origin/${branch}`
+    ])
+  } catch {
+    return false // no remote-tracking ref for this branch
+  }
+  try {
+    await run('git', ['-C', wtPath, 'merge', '--ff-only', '--quiet', `origin/${branch}`])
+    return true
+  } catch {
+    return false // diverged / non-fast-forward — leave the checkout as-is
+  }
 }
 
 /** Remove a worktree directory (force, since it may contain untracked/build files). */

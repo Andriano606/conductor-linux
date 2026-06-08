@@ -19,6 +19,8 @@ import {
 import {
   branchDelete,
   branchExists,
+  fastForwardToRemote,
+  fetchQuiet,
   isGitRepo,
   worktreeAdd,
   worktreeAddExisting,
@@ -127,6 +129,11 @@ export async function createWorkspace(
     throw new Error('Project path is not a git repository. Check the project settings.')
   }
 
+  // Refresh remote-tracking refs up front so the new branch is cut from the latest
+  // origin state — the modal's fetch may be stale if it sat open. Best effort: a
+  // hung/offline remote just falls back to the refs already on disk.
+  await fetchQuiet(project.repoPath)
+
   // One field is both the display name and the full branch name (no forced prefix).
   // When checking out an existing branch, that branch name is also the workspace name.
   const branchName = name.trim()
@@ -168,6 +175,10 @@ export async function createWorkspace(
   mkdirSync(baseDir, { recursive: true })
   if (useExistingBranch) {
     await worktreeAddExisting(project.repoPath, wtPath, branchName)
+    // The new-branch flow already cuts from a fresh origin ref via `baseBranch`,
+    // but checking out an existing local branch leaves it wherever it was — so
+    // fast-forward it to origin/<branch> to pull in remote commits it's behind.
+    await fastForwardToRemote(wtPath, branchName)
   } else {
     await worktreeAdd(project.repoPath, wtPath, branchName, baseBranch)
   }
