@@ -183,6 +183,16 @@ export function mount(host: HTMLElement, id: string, kind: PtyKind): void {
     // user always lands at the bottom rather than wherever they last scrolled.
     e.term.scrollToBottom()
     e.term.focus()
+    // Re-attaching the wrapper (replaceChildren, above) resets the
+    // .xterm-viewport DOM scrollTop to 0. When the buffer was already at the
+    // bottom, scrollToBottom() is a no-op that never re-syncs the DOM scrollbar,
+    // so the canvas shows the bottom while the scrollbar thumb sits at the top —
+    // and the next wheel tick teleports up. Force the DOM viewport back to the
+    // bottom once layout (and xterm's scrollHeight) have settled next frame.
+    requestAnimationFrame(() => {
+      const vp = e.wrapper.querySelector('.xterm-viewport') as HTMLElement | null
+      if (vp) vp.scrollTop = vp.scrollHeight
+    })
   })
 }
 

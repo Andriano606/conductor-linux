@@ -16,7 +16,13 @@ const xt = vi.hoisted(() => {
     loadAddon = vi.fn((addon: FakeFitAddon) => {
       addon.term = this
     })
-    open = vi.fn()
+    // Real xterm builds a .xterm-viewport (the scrollable element). Emulate it so
+    // the DOM-scrollbar re-sync path on activation is exercisable.
+    open = vi.fn((host: HTMLElement) => {
+      const vp = host.ownerDocument.createElement('div')
+      vp.className = 'xterm-viewport'
+      host.appendChild(vp)
+    })
     onData = vi.fn()
     onSelectionChange = vi.fn()
     attachCustomKeyEventHandler = vi.fn()
@@ -143,6 +149,32 @@ describe('termRegistry', () => {
     mount(host, id, 'claude')
     await nextFrame()
     expect(term.scrollToBottom).toHaveBeenCalled()
+  })
+
+  it('re-syncs the DOM scrollbar to the bottom on activation', async () => {
+    const id = freshId()
+    writeData(id, 'claude', '')
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    mount(host, id, 'claude')
+
+    // Re-attaching the wrapper zeroed the viewport scrollTop; the buffer is
+    // already at the bottom so scrollToBottom() won't move it. Stub layout
+    // (jsdom has none) and confirm mount forces the DOM scrollbar to the bottom.
+    const vp = host.querySelector('.xterm-viewport') as HTMLElement
+    let scrollTop = 0
+    Object.defineProperty(vp, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(vp, 'scrollTop', {
+      get: () => scrollTop,
+      set: (v: number) => {
+        scrollTop = v
+      },
+      configurable: true
+    })
+
+    await nextFrame() // fit + scrollToBottom + focus
+    await nextFrame() // deferred DOM-viewport sync
+    expect(scrollTop).toBe(1000)
   })
 
   it('does not yank the view to the bottom when scrolled up', async () => {
