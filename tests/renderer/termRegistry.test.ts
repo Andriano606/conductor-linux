@@ -12,17 +12,12 @@ const xt = vi.hoisted(() => {
     focus = vi.fn()
     dispose = vi.fn()
     scrollToBottom = vi.fn()
-    buffer = { active: { viewportY: 0, baseY: 0 } }
+    scrollToTop = vi.fn()
+    buffer = { active: { viewportY: 0, baseY: 0, length: 0 } }
     loadAddon = vi.fn((addon: FakeFitAddon) => {
       addon.term = this
     })
-    // Real xterm builds a .xterm-viewport (the scrollable element). Emulate it so
-    // the DOM-scrollbar re-sync path on activation is exercisable.
-    open = vi.fn((host: HTMLElement) => {
-      const vp = host.ownerDocument.createElement('div')
-      vp.className = 'xterm-viewport'
-      host.appendChild(vp)
-    })
+    open = vi.fn()
     onData = vi.fn()
     onSelectionChange = vi.fn()
     attachCustomKeyEventHandler = vi.fn()
@@ -151,30 +146,35 @@ describe('termRegistry', () => {
     expect(term.scrollToBottom).toHaveBeenCalled()
   })
 
-  it('re-syncs the DOM scrollbar to the bottom on activation', async () => {
+  it('bounces off the top on activation so a grown buffer re-pins to the bottom', async () => {
     const id = freshId()
     writeData(id, 'claude', '')
+    const term = xt.instances.at(-1) as FakeTerminal
+    // Buffer grew past the viewport while hidden; ydisp is already at the base so
+    // a bare scrollToBottom() would no-op. mount must bounce off the top to force
+    // xterm to recompute its scroll area and land on the true bottom.
+    term.buffer.active.length = 1000
     const host = document.createElement('div')
     document.body.appendChild(host)
     mount(host, id, 'claude')
+    await nextFrame() // fit + initial scrollToBottom + focus
+    await nextFrame() // deferred re-pin
+    expect(term.scrollToTop).toHaveBeenCalled()
+    expect(term.scrollToBottom).toHaveBeenCalled()
+  })
 
-    // Re-attaching the wrapper zeroed the viewport scrollTop; the buffer is
-    // already at the bottom so scrollToBottom() won't move it. Stub layout
-    // (jsdom has none) and confirm mount forces the DOM scrollbar to the bottom.
-    const vp = host.querySelector('.xterm-viewport') as HTMLElement
-    let scrollTop = 0
-    Object.defineProperty(vp, 'scrollHeight', { value: 1000, configurable: true })
-    Object.defineProperty(vp, 'scrollTop', {
-      get: () => scrollTop,
-      set: (v: number) => {
-        scrollTop = v
-      },
-      configurable: true
-    })
-
-    await nextFrame() // fit + scrollToBottom + focus
-    await nextFrame() // deferred DOM-viewport sync
-    expect(scrollTop).toBe(1000)
+  it('does not bounce when the buffer fits in the viewport', async () => {
+    const id = freshId()
+    writeData(id, 'claude', '')
+    const term = xt.instances.at(-1) as FakeTerminal
+    // No scrollback (length <= rows) → nothing to re-pin, so skip the top bounce.
+    term.buffer.active.length = 10
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    mount(host, id, 'claude')
+    await nextFrame()
+    await nextFrame()
+    expect(term.scrollToTop).not.toHaveBeenCalled()
   })
 
   it('does not yank the view to the bottom when scrolled up', async () => {

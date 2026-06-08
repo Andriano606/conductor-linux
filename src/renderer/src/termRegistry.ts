@@ -170,6 +170,18 @@ export function writeData(id: string, kind: PtyKind, data: string): void {
   scheduleFlush()
 }
 
+/**
+ * Land on the true bottom, forcing xterm to recompute its scroll area. When the
+ * buffer has scrollback, bounce off the top first: scrollToBottom() is a no-op
+ * if ydisp is already at the base, and xterm only re-syncs the scroll area
+ * (height + DOM scrollbar) on a real scroll — without the bounce a buffer that
+ * grew while hidden leaves the scrollbar stale and the latest rows unreachable.
+ */
+function snapToBottom(e: TermEntry): void {
+  if (e.term.buffer.active.length > e.term.rows) e.term.scrollToTop()
+  e.term.scrollToBottom()
+}
+
 /** Mount the given terminal into the host element and size it to fit. */
 export function mount(host: HTMLElement, id: string, kind: PtyKind): void {
   const e = ensure(id, kind)
@@ -183,16 +195,15 @@ export function mount(host: HTMLElement, id: string, kind: PtyKind): void {
     // user always lands at the bottom rather than wherever they last scrolled.
     e.term.scrollToBottom()
     e.term.focus()
-    // Re-attaching the wrapper (replaceChildren, above) resets the
-    // .xterm-viewport DOM scrollTop to 0. When the buffer was already at the
-    // bottom, scrollToBottom() is a no-op that never re-syncs the DOM scrollbar,
-    // so the canvas shows the bottom while the scrollbar thumb sits at the top —
-    // and the next wheel tick teleports up. Force the DOM viewport back to the
-    // bottom once layout (and xterm's scrollHeight) have settled next frame.
-    requestAnimationFrame(() => {
-      const vp = e.wrapper.querySelector('.xterm-viewport') as HTMLElement | null
-      if (vp) vp.scrollTop = vp.scrollHeight
-    })
+    // Re-pin to the bottom once the renderer has re-measured the just-reattached
+    // element. A bare scrollToBottom() is a no-op when ydisp is already at the
+    // base, and xterm only recomputes its scroll area (height + DOM scrollbar
+    // position) on an *actual* scroll. While this terminal was hidden its buffer
+    // can have grown (e.g. Claude drawing an option menu), so the stale scroll
+    // area leaves the latest output unreachable below the thumb and the scrollbar
+    // desynced. Bouncing off the top forces a real scroll cycle, so xterm
+    // recomputes from the live buffer and lands on the true bottom.
+    requestAnimationFrame(() => snapToBottom(e))
   })
 }
 
