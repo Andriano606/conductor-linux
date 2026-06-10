@@ -1,5 +1,9 @@
 import { create } from 'zustand'
 import type { Project, ProjectScripts, PtyKind, Settings, Workspace } from '@shared/types'
+import type { ClaudeMenu } from './menuDetect'
+
+/** Sent-message history kept per workspace for ArrowUp recall in the composer. */
+const HISTORY_LIMIT = 50
 
 interface AppState {
   settings: Settings | null
@@ -23,6 +27,12 @@ interface AppState {
   claudeBusyById: Record<string, boolean>
   /** Last-selected tab per workspace id, so switching workspaces keeps the tab. */
   kindById: Record<string, PtyKind>
+  /** Unsent composer draft per workspace id (survives workspace switches). */
+  draftById: Record<string, string>
+  /** Select menu currently on the Claude screen, per workspace id. */
+  menuById: Record<string, ClaudeMenu | null>
+  /** Messages sent from the composer, oldest first, per workspace id. */
+  historyById: Record<string, string[]>
   /** Pending in-app confirmation (replaces native confirm(), which breaks window focus on Linux). */
   confirmRequest: { message: string; onResolve: (ok: boolean) => void } | null
 
@@ -55,6 +65,9 @@ interface AppState {
   deleteWorkspace: (id: string) => Promise<void>
   setRunning: (id: string, running: boolean) => void
   setClaudeBusy: (id: string, busy: boolean) => void
+  setDraft: (id: string, text: string) => void
+  setMenu: (id: string, menu: ClaudeMenu | null) => void
+  pushHistory: (id: string, text: string) => void
   setProjects: (projects: Project[]) => void
   setWorkspaces: (ws: Workspace[]) => void
   clearError: () => void
@@ -76,6 +89,9 @@ export const useStore = create<AppState>((set, get) => ({
   runningById: {},
   claudeBusyById: {},
   kindById: {},
+  draftById: {},
+  menuById: {},
+  historyById: {},
   confirmRequest: null,
 
   load: async () => {
@@ -208,6 +224,18 @@ export const useStore = create<AppState>((set, get) => ({
 
   setClaudeBusy: (id, busy) =>
     set((s) => ({ claudeBusyById: { ...s.claudeBusyById, [id]: busy } })),
+
+  setDraft: (id, text) => set((s) => ({ draftById: { ...s.draftById, [id]: text } })),
+
+  setMenu: (id, menu) => set((s) => ({ menuById: { ...s.menuById, [id]: menu } })),
+
+  // Skip a message identical to the last one so ArrowUp doesn't repeat it.
+  pushHistory: (id, text) =>
+    set((s) => {
+      const prev = s.historyById[id] ?? []
+      if (prev[prev.length - 1] === text) return s
+      return { historyById: { ...s.historyById, [id]: [...prev, text].slice(-HISTORY_LIMIT) } }
+    }),
 
   archiveActive: async () => {
     const id = get().activeId

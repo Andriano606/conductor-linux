@@ -9,7 +9,8 @@ import { ProjectSettingsModal } from './components/ProjectSettingsModal'
 import { NewWorkspaceModal } from './components/NewWorkspaceModal'
 import { ArchivedModal } from './components/ArchivedModal'
 import { ConfirmModal } from './components/ConfirmModal'
-import { disposeWorkspace, writeData } from './termRegistry'
+import { ClaudePane } from './components/ClaudePane'
+import { disposeWorkspace, requestMenuScan, setMenuListener, writeData } from './termRegistry'
 
 export function App(): JSX.Element {
   const {
@@ -33,7 +34,21 @@ export function App(): JSX.Element {
 
     const offData = window.api.onPtyData(({ id, kind, data }) => writeData(id, kind, data))
     const offRunning = window.api.onTaskRunning(({ id, running }) => setRunning(id, running))
-    const offBusy = window.api.onClaudeBusy(({ id, busy }) => setClaudeBusy(id, busy))
+    // Select menus detected on the Claude screen feed the chips above the
+    // composer. While Claude is busy generating, anything that still looks like
+    // a menu is stale, so it is suppressed.
+    setMenuListener((id, menu) => {
+      const s = useStore.getState()
+      s.setMenu(id, s.claudeBusyById[id] ? null : menu)
+    })
+    const offBusy = window.api.onClaudeBusy(({ id, busy }) => {
+      setClaudeBusy(id, busy)
+      // Busy → the chips are stale immediately. Idle → rescan: the menu usually
+      // finished rendering before the busy detector's idle timer fired, so the
+      // settle-scan that saw it was suppressed by the gate above.
+      if (busy) useStore.getState().setMenu(id, null)
+      else requestMenuScan(id)
+    })
     const offProjects = window.api.onProjectsChanged((next) => setProjects(next))
     const offChanged = window.api.onWorkspacesChanged((next) => {
       const state = useStore.getState()
@@ -56,6 +71,7 @@ export function App(): JSX.Element {
     })
 
     return () => {
+      setMenuListener(null)
       offData()
       offRunning()
       offBusy()
@@ -74,7 +90,11 @@ export function App(): JSX.Element {
         {active ? (
           <>
             <Toolbar ws={active} />
-            <TerminalView id={active.id} kind={activeKind} />
+            {activeKind === 'claude' ? (
+              <ClaudePane id={active.id} />
+            ) : (
+              <TerminalView id={active.id} kind={activeKind} />
+            )}
           </>
         ) : (
           <div className="placeholder">

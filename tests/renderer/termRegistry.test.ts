@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Fake xterm — no canvas/webgl. Records constructor opts and instances.
 const xt = vi.hoisted(() => {
+  type FakeLine = { isWrapped: boolean; translateToString: (trim?: boolean) => string }
   const instances: FakeTerminal[] = []
   class FakeTerminal {
     options: Record<string, unknown>
@@ -13,15 +14,29 @@ const xt = vi.hoisted(() => {
     dispose = vi.fn()
     scrollToBottom = vi.fn()
     scrollToTop = vi.fn()
-    buffer = { active: { viewportY: 0, baseY: 0, length: 0 } }
+    buffer = {
+      active: {
+        viewportY: 0,
+        baseY: 0,
+        length: 0,
+        getLine: (_y: number): FakeLine | undefined => undefined
+      }
+    }
     loadAddon = vi.fn((addon: FakeFitAddon) => {
       addon.term = this
     })
     open = vi.fn()
     onData = vi.fn()
+    onWriteParsed = vi.fn()
     onSelectionChange = vi.fn()
     attachCustomKeyEventHandler = vi.fn()
     getSelection = vi.fn(() => '')
+    /** Make the live screen render the given rows (one string per row). */
+    setScreen(rows: string[]): void {
+      this.rows = rows.length
+      this.buffer.active.getLine = (y: number) =>
+        y < rows.length ? { isWrapped: false, translateToString: () => rows[y] } : undefined
+    }
     constructor(opts: Record<string, unknown>) {
       this.options = opts
       instances.push(this)
@@ -47,6 +62,8 @@ import {
   disposeWorkspace,
   fitAndResize,
   mount,
+  requestMenuScan,
+  setMenuListener,
   writeData
 } from '../../src/renderer/src/termRegistry'
 import { setupRenderer, Api } from './helpers'
@@ -77,14 +94,18 @@ describe('termRegistry', () => {
     expect(xt.instances).toHaveLength(2)
   })
 
-  it('makes the task terminal read-only and others interactive', () => {
+  it('makes the task and claude terminals read-only and the shell interactive', () => {
     const id = freshId()
     writeData(id, 'task', 'x')
     expect(xt.instances[0].options.disableStdin).toBe(true)
+    // Claude is output-only too: all input goes through the composer.
     writeData(id, 'claude', 'y')
-    expect(xt.instances[1].options.disableStdin).toBe(false)
-    // Interactive terminals wire keystrokes to the PTY.
-    expect(xt.instances[1].onData).toHaveBeenCalled()
+    expect(xt.instances[1].options.disableStdin).toBe(true)
+    expect(xt.instances[1].onData).not.toHaveBeenCalled()
+    // Only the shell wires keystrokes to the PTY.
+    writeData(id, 'shell', 'z')
+    expect(xt.instances[2].options.disableStdin).toBe(false)
+    expect(xt.instances[2].onData).toHaveBeenCalled()
   })
 
   it('routes data to the matching terminal (batched per frame)', async () => {
@@ -108,23 +129,35 @@ describe('termRegistry', () => {
   it('mount places the wrapper in the host and focuses/resizes on activation', async () => {
     const id = freshId()
     // Created but not mounted → wrapper not connected → fitAndResize is a no-op.
-    writeData(id, 'claude', '')
-    fitAndResize(id, 'claude')
+    writeData(id, 'shell', '')
+    fitAndResize(id, 'shell')
     expect(api.resizePty).not.toHaveBeenCalled()
     // Background resize does not steal focus.
     expect(xt.instances[0].focus).not.toHaveBeenCalled()
 
     const host = document.createElement('div')
     document.body.appendChild(host)
-    mount(host, id, 'claude')
+    mount(host, id, 'shell')
     expect(host.querySelector('.term-mount')).not.toBeNull()
 
     // mount defers fit + focus to the next frame.
     await nextFrame()
     expect(xt.instances[0].focus).toHaveBeenCalled()
     // fit() changed the dims (80→120) so the new size is pushed to the PTY.
-    expect(api.resizePty).toHaveBeenCalledWith(id, 'claude', 120, 40)
+    expect(api.resizePty).toHaveBeenCalledWith(id, 'shell', 120, 40)
     // The view was at the bottom, so it stays pinned after the reflow.
+    expect(xt.instances[0].scrollToBottom).toHaveBeenCalled()
+  })
+
+  it('mount never focuses the claude terminal (the composer owns focus)', async () => {
+    const id = freshId()
+    writeData(id, 'claude', '')
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    mount(host, id, 'claude')
+    await nextFrame()
+    expect(xt.instances[0].focus).not.toHaveBeenCalled()
+    // Everything else about activation still happens.
     expect(xt.instances[0].scrollToBottom).toHaveBeenCalled()
   })
 
@@ -211,8 +244,8 @@ describe('termRegistry', () => {
   const handlerOf = (term: FakeTerminal): ((e: KeyboardEvent) => boolean) =>
     term.attachCustomKeyEventHandler.mock.calls[0][0]
 
-  it('Ctrl+C copies the selection in every interactive terminal', () => {
-    for (const kind of ['claude', 'shell'] as const) {
+  it('Ctrl+C copies the selection in every terminal', () => {
+    for (const kind of ['claude', 'shell', 'task'] as const) {
       const id = freshId()
       writeData(id, kind, '')
       const term = xt.instances.at(-1) as FakeTerminal
@@ -224,49 +257,99 @@ describe('termRegistry', () => {
     }
   })
 
-  it('Ctrl+C interrupts Claude but throttles rapid taps so it cannot exit', () => {
-    const now = vi.spyOn(performance, 'now')
-    const id = freshId()
-    writeData(id, 'claude', '')
-    const term = xt.instances.at(-1) as FakeTerminal
-    const handle = handlerOf(term)
-
-    // First press → a single \x03 (interrupt), always swallowed. (performance.now
-    // is always well past 1s by the time a key is pressed, so the first ever tap
-    // is never throttled.)
-    now.mockReturnValue(5000)
-    expect(handle(ctrlC)).toBe(false)
-    expect(api.sendInput).toHaveBeenCalledWith(id, 'claude', '\x03')
-    expect(api.sendInput).toHaveBeenCalledTimes(1)
-
-    // A second press inside the 1s window — the CLI's double-tap exit — is dropped.
-    now.mockReturnValue(5500)
-    expect(handle(ctrlC)).toBe(false)
-    expect(api.sendInput).toHaveBeenCalledTimes(1)
-
-    // Past the window, Ctrl+C interrupts again.
-    now.mockReturnValue(6000)
-    expect(handle(ctrlC)).toBe(false)
-    expect(api.sendInput).toHaveBeenCalledTimes(2)
-    now.mockRestore()
-  })
-
   it('Ctrl+C in the shell falls through to a normal interrupt', () => {
     const id = freshId()
     writeData(id, 'shell', '')
     const term = xt.instances.at(-1) as FakeTerminal
-    // No selection → let xterm emit its own \x03 (return true), no throttle and
-    // no direct send, so the shell behaves like a real terminal.
+    // No selection → let xterm emit its own \x03 (return true), no direct send,
+    // so the shell behaves like a real terminal.
     expect(handlerOf(term)(ctrlC)).toBe(true)
     expect(api.sendInput).not.toHaveBeenCalled()
   })
 
-  it('does not intercept keys other than Ctrl+C', () => {
+  it('swallows every key in the read-only claude terminal', () => {
     const id = freshId()
     writeData(id, 'claude', '')
     const term = xt.instances.at(-1) as FakeTerminal
     const plain = { type: 'keydown', ctrlKey: false, key: 'a' } as unknown as KeyboardEvent
+    // Nothing reaches the PTY: input happens in the composer, not the terminal.
+    expect(handlerOf(term)(plain)).toBe(false)
+    expect(api.sendInput).not.toHaveBeenCalled()
+  })
+
+  it('does not intercept shell keys other than Ctrl+C', () => {
+    const id = freshId()
+    writeData(id, 'shell', '')
+    const term = xt.instances.at(-1) as FakeTerminal
+    const plain = { type: 'keydown', ctrlKey: false, key: 'a' } as unknown as KeyboardEvent
     expect(handlerOf(term)(plain)).toBe(true)
+  })
+
+  describe('claude menu scanning', () => {
+    const SCREEN = ['Do you want to proceed?', '❯ 1. Yes', '  2. No', '']
+
+    afterEach(() => {
+      setMenuListener(null)
+      vi.useRealTimers()
+    })
+
+    const fireWriteParsed = (term: FakeTerminal): void => {
+      for (const call of term.onWriteParsed.mock.calls) (call[0] as () => void)()
+    }
+
+    it('reports a menu to the listener once writes settle', () => {
+      const id = freshId()
+      writeData(id, 'claude', '')
+      const term = xt.instances.at(-1) as FakeTerminal
+      term.setScreen(SCREEN)
+      const cb = vi.fn()
+      setMenuListener(cb)
+      vi.useFakeTimers()
+      // Several rapid writes debounce into a single scan.
+      fireWriteParsed(term)
+      fireWriteParsed(term)
+      expect(cb).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(200)
+      expect(cb).toHaveBeenCalledTimes(1)
+      const [reportedId, menu] = cb.mock.calls[0]
+      expect(reportedId).toBe(id)
+      expect(menu.options.map((o: { label: string }) => o.label)).toEqual(['Yes', 'No'])
+      expect(menu.selectedIndex).toBe(0)
+    })
+
+    it('reports null when the screen has no menu', () => {
+      const id = freshId()
+      writeData(id, 'claude', '')
+      const term = xt.instances.at(-1) as FakeTerminal
+      term.setScreen(['just some output', ''])
+      const cb = vi.fn()
+      setMenuListener(cb)
+      vi.useFakeTimers()
+      fireWriteParsed(term)
+      vi.advanceTimersByTime(200)
+      expect(cb).toHaveBeenCalledWith(id, null)
+    })
+
+    it('requestMenuScan scans immediately and reports null for unknown ids', () => {
+      const cb = vi.fn()
+      setMenuListener(cb)
+      requestMenuScan('nope')
+      expect(cb).toHaveBeenCalledWith('nope', null)
+
+      const id = freshId()
+      writeData(id, 'claude', '')
+      const term = xt.instances.at(-1) as FakeTerminal
+      term.setScreen(SCREEN)
+      requestMenuScan(id)
+      expect(cb).toHaveBeenLastCalledWith(id, expect.objectContaining({ selectedIndex: 0 }))
+    })
+
+    it('only claude terminals are scanned', () => {
+      const id = freshId()
+      writeData(id, 'shell', '')
+      const term = xt.instances.at(-1) as FakeTerminal
+      expect(term.onWriteParsed).not.toHaveBeenCalled()
+    })
   })
 })
 

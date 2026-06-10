@@ -88,7 +88,11 @@ export function resetStore(): void {
     busy: false,
     error: null,
     runningById: {},
+    claudeBusyById: {},
     kindById: {},
+    draftById: {},
+    menuById: {},
+    historyById: {},
     confirmRequest: null
   })
 }

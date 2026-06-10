@@ -1,6 +1,7 @@
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import type { PtyKind } from '@shared/types'
+import { collectLogicalLines, detectMenu, type ClaudeMenu } from './menuDetect'
 
 interface TermEntry {
   wrapper: HTMLDivElement
@@ -32,7 +33,9 @@ function ensure(id: string, kind: PtyKind): TermEntry {
 
   // The "task" terminal (setup/run/archive output) is read-only so the user
   // can't accidentally kill the running app with Ctrl+C or stray keystrokes.
-  const readOnly = kind === 'task'
+  // The "claude" terminal is read-only too: all input goes through the composer
+  // panel (ClaudePane), the terminal itself is pure output.
+  const readOnly = kind === 'task' || kind === 'claude'
   const term = new Terminal({
     fontFamily: 'JetBrains Mono, Menlo, Consolas, monospace',
     fontSize: 13,
@@ -69,16 +72,8 @@ function ensure(id: string, kind: PtyKind): TermEntry {
   if (!readOnly) {
     term.onData((d) => window.api.sendInput(id, kind, d))
 
-    // Ctrl+C handling for the interactive terminals (claude + shell):
-    //  - If text is selected, Ctrl+C copies it (a real terminal convention) —
-    //    this works in every tab, not just Claude.
-    //  - Otherwise it interrupts. In the shell that's the normal \x03. In the
-    //    Claude terminal a single press interrupts the current generation, but a
-    //    quick *double* press is how the `claude` CLI exits — closing the
-    //    console out from under the user. We never want Ctrl+C to close Claude,
-    //    so we forward a single throttled \x03 that can't reach Claude's
-    //    double-tap exit window.
-    let lastSigint = 0
+    // Ctrl+C in the shell: if text is selected, copy it (a real terminal
+    // convention); otherwise fall through so xterm emits the normal \x03.
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== 'keydown' || !ev.ctrlKey || (ev.key !== 'c' && ev.key !== 'C')) {
         return true
@@ -88,15 +83,7 @@ function ensure(id: string, kind: PtyKind): TermEntry {
         window.api.copyText(sel)
         return false
       }
-      if (kind !== 'claude') return true // shell: let xterm emit \x03 normally
-      const now = performance.now()
-      if (now - lastSigint >= 1000) {
-        lastSigint = now
-        window.api.sendInput(id, kind, '\x03')
-      }
-      // Always swallow for Claude: returning true would let xterm emit its own
-      // \x03 and bypass the throttle, re-enabling the double-tap exit.
-      return false
+      return true
     })
   } else {
     // View-only terminal (task output): let the user select & copy text, but
@@ -116,6 +103,13 @@ function ensure(id: string, kind: PtyKind): TermEntry {
     })
   }
 
+  // Rescan the Claude screen for a select menu once written data has actually
+  // been parsed into the buffer — covers both the per-frame flushes and the
+  // attach snapshot (so a menu left on screen reappears after an app restart).
+  if (kind === 'claude') {
+    term.onWriteParsed(() => scheduleMenuScan(id))
+  }
+
   e = { wrapper, term, fit, attached: false }
   terms.set(k, e)
 
@@ -127,6 +121,52 @@ function ensure(id: string, kind: PtyKind): TermEntry {
     scheduleFlush()
   })
   return e
+}
+
+/**
+ * Claude select-menu detection: after the Claude screen settles (no parsed
+ * writes for SCAN_DEBOUNCE_MS), the visible buffer is parsed and the result is
+ * handed to a single registered listener (App wires it into the store). Kept
+ * registry-level so the scanner needs no React and survives unmounted tabs.
+ */
+let menuListener: ((id: string, menu: ClaudeMenu | null) => void) | null = null
+const scanTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const SCAN_DEBOUNCE_MS = 200
+
+export function setMenuListener(cb: ((id: string, menu: ClaudeMenu | null) => void) | null): void {
+  menuListener = cb
+}
+
+function scheduleMenuScan(id: string): void {
+  const prev = scanTimers.get(id)
+  if (prev) clearTimeout(prev)
+  scanTimers.set(
+    id,
+    setTimeout(() => {
+      scanTimers.delete(id)
+      runMenuScan(id)
+    }, SCAN_DEBOUNCE_MS)
+  )
+}
+
+/** Immediate rescan, used when Claude flips to idle (busy → false). */
+export function requestMenuScan(id: string): void {
+  const prev = scanTimers.get(id)
+  if (prev) {
+    clearTimeout(prev)
+    scanTimers.delete(id)
+  }
+  runMenuScan(id)
+}
+
+function runMenuScan(id: string): void {
+  if (!menuListener) return
+  const e = terms.get(key(id, 'claude'))
+  if (!e) {
+    menuListener(id, null)
+    return
+  }
+  menuListener(id, detectMenu(collectLogicalLines(e.term.buffer.active, e.term.rows)))
 }
 
 // Incoming pty chunks are coalesced per terminal and flushed in a single
@@ -194,7 +234,8 @@ export function mount(host: HTMLElement, id: string, kind: PtyKind): void {
     // Snap to the latest output whenever a tab/workspace is activated, so the
     // user always lands at the bottom rather than wherever they last scrolled.
     e.term.scrollToBottom()
-    e.term.focus()
+    // The Claude tab keeps focus in the composer, never in the terminal.
+    if (kind !== 'claude') e.term.focus()
     // Re-pin to the bottom once the renderer has re-measured the just-reattached
     // element. A bare scrollToBottom() is a no-op when ydisp is already at the
     // base, and xterm only recomputes its scroll area (height + DOM scrollbar
@@ -228,6 +269,11 @@ export function fitAndResize(id: string, kind: PtyKind): void {
 }
 
 export function disposeWorkspace(id: string): void {
+  const timer = scanTimers.get(id)
+  if (timer) {
+    clearTimeout(timer)
+    scanTimers.delete(id)
+  }
   for (const kind of ['claude', 'task', 'shell'] as PtyKind[]) {
     const k = key(id, kind)
     const e = terms.get(k)

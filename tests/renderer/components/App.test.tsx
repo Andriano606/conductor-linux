@@ -8,7 +8,9 @@ vi.mock('../../../src/renderer/src/termRegistry', () => ({
   disposeWorkspace: vi.fn(),
   writeData: vi.fn(),
   mount: vi.fn(),
-  fitAndResize: vi.fn()
+  fitAndResize: vi.fn(),
+  setMenuListener: vi.fn(),
+  requestMenuScan: vi.fn()
 }))
 
 import { App } from '../../../src/renderer/src/App'

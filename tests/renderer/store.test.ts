@@ -18,7 +18,11 @@ const initial = {
   busy: false,
   error: null,
   runningById: {},
+  claudeBusyById: {},
   kindById: {},
+  draftById: {},
+  menuById: {},
+  historyById: {},
   confirmRequest: null
 }
 
@@ -259,5 +263,36 @@ describe('plain setters', () => {
     useStore.setState({ error: 'boom' })
     get().clearError()
     expect(get().error).toBeNull()
+  })
+
+  it('setDraft / setMenu keep per-workspace entries', () => {
+    get().setDraft('a', 'hello')
+    get().setDraft('b', 'other')
+    expect(get().draftById).toEqual({ a: 'hello', b: 'other' })
+    const menu = { options: [{ index: 0, label: 'Yes' }], selectedIndex: 0, multiSelect: false }
+    get().setMenu('a', menu)
+    expect(get().menuById.a).toEqual(menu)
+    get().setMenu('a', null)
+    expect(get().menuById.a).toBeNull()
+  })
+})
+
+describe('pushHistory', () => {
+  it('appends messages and skips a consecutive duplicate', () => {
+    get().pushHistory('a', 'one')
+    get().pushHistory('a', 'two')
+    get().pushHistory('a', 'two')
+    expect(get().historyById.a).toEqual(['one', 'two'])
+    // A repeat that is not consecutive is kept (it is a new send).
+    get().pushHistory('a', 'one')
+    expect(get().historyById.a).toEqual(['one', 'two', 'one'])
+  })
+
+  it('caps the history at 50 entries', () => {
+    for (let i = 0; i < 60; i++) get().pushHistory('a', `msg ${i}`)
+    const h = get().historyById.a
+    expect(h).toHaveLength(50)
+    expect(h[0]).toBe('msg 10')
+    expect(h[49]).toBe('msg 59')
   })
 })
