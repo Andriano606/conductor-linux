@@ -35,8 +35,12 @@ const api = {
   listWorkspaces: (): Promise<Workspace[]> => ipcRenderer.invoke('workspaces:list'),
   listBranches: (
     projectId: string
-  ): Promise<{ branches: string[]; localBranches: string[]; defaultBranch: string }> =>
-    ipcRenderer.invoke('git:branches', projectId),
+  ): Promise<{
+    branches: string[]
+    existingBranches: string[]
+    checkedOut: string[]
+    defaultBranch: string
+  }> => ipcRenderer.invoke('git:branches', projectId),
   currentBranch: (id: string): Promise<string> => ipcRenderer.invoke('git:currentBranch', id),
   createWorkspace: (
     projectId: string,

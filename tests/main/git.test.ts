@@ -7,12 +7,15 @@ import { TempRepo, tempPlainDir } from '../helpers/tempRepo'
 import {
   branchDelete,
   branchExists,
+  checkedOutBranches,
   currentBranch,
   fastForwardToRemote,
   isGitRepo,
   listBranches,
+  remoteBranchExists,
   worktreeAdd,
   worktreeAddExisting,
+  worktreeAddFromRemote,
   worktreeList,
   worktreePrune,
   worktreeRemove
@@ -145,11 +148,21 @@ describe('listBranches (offline, no remote)', () => {
     expect(branches.every((b) => !b.endsWith('/HEAD'))).toBe(true)
   })
 
-  it('reports local branches in localBranches', async () => {
+  it('reports local branches in existingBranches', async () => {
     repo.branch('feature-a')
-    const { localBranches } = await listBranches(repo.dir)
-    expect(localBranches).toContain('main')
-    expect(localBranches).toContain('feature-a')
+    const { existingBranches } = await listBranches(repo.dir)
+    expect(existingBranches).toContain('main')
+    expect(existingBranches).toContain('feature-a')
+  })
+
+  it('reports branches checked out in worktrees (incl. the main repo)', async () => {
+    repo.branch('free-branch')
+    const p = wtPath('wt-co')
+    await worktreeAdd(repo.dir, p, 'wt-branch')
+    const { checkedOut } = await listBranches(repo.dir)
+    expect(checkedOut).toContain('main') // checked out in the main repo
+    expect(checkedOut).toContain('wt-branch')
+    expect(checkedOut).not.toContain('free-branch')
   })
 
   it('settles quickly with no remote configured', async () => {
@@ -173,13 +186,85 @@ describe('listBranches (with a remote)', () => {
   afterEach(() => rmSync(remote, { recursive: true, force: true }))
 
   it('derives default branch from origin/HEAD and filters out */HEAD refs', async () => {
-    const { branches, localBranches, defaultBranch } = await listBranches(repo.dir)
+    const { branches, existingBranches, defaultBranch } = await listBranches(repo.dir)
     expect(defaultBranch).toBe('origin/main')
     expect(branches).toContain('origin/main')
     expect(branches.every((b) => !b.endsWith('/HEAD'))).toBe(true)
-    // Remote-tracking refs are excluded from localBranches.
-    expect(localBranches).toContain('main')
-    expect(localBranches).not.toContain('origin/main')
+    // existingBranches carries plain names only — no 'origin/…' duplicates.
+    expect(existingBranches).toContain('main')
+    expect(existingBranches).not.toContain('origin/main')
+    expect(existingBranches.filter((b) => b === 'main')).toHaveLength(1)
+  })
+
+  it('offers an origin-only branch (no local counterpart) in existingBranches', async () => {
+    // Push a branch, then drop the local ref — only origin/remote-only is left.
+    execFileSync('git', ['-C', repo.dir, 'branch', 'remote-only'])
+    execFileSync('git', ['-C', repo.dir, 'push', '-q', 'origin', 'remote-only'])
+    execFileSync('git', ['-C', repo.dir, 'branch', '-D', 'remote-only'])
+    execFileSync('git', ['-C', repo.dir, 'fetch', '-q', 'origin'])
+    const { existingBranches, checkedOut } = await listBranches(repo.dir)
+    expect(existingBranches).toContain('remote-only')
+    expect(checkedOut).not.toContain('remote-only')
+  })
+})
+
+describe('remoteBranchExists', () => {
+  let remote: string
+  beforeEach(() => {
+    remote = mkdtempSync(join(tmpdir(), 'conductor-remote-'))
+    execFileSync('git', ['init', '--bare', '-q', remote])
+    execFileSync('git', ['-C', repo.dir, 'remote', 'add', 'origin', remote])
+    execFileSync('git', ['-C', repo.dir, 'push', '-q', 'origin', 'main'])
+  })
+  afterEach(() => rmSync(remote, { recursive: true, force: true }))
+
+  it('is true for an origin branch and false otherwise', async () => {
+    expect(await remoteBranchExists(repo.dir, 'main')).toBe(true)
+    expect(await remoteBranchExists(repo.dir, 'nope')).toBe(false)
+  })
+})
+
+describe('worktreeAddFromRemote', () => {
+  let remote: string
+  beforeEach(() => {
+    remote = mkdtempSync(join(tmpdir(), 'conductor-remote-'))
+    execFileSync('git', ['init', '--bare', '-q', remote])
+    execFileSync('git', ['-C', repo.dir, 'remote', 'add', 'origin', remote])
+    execFileSync('git', ['-C', repo.dir, 'push', '-q', 'origin', 'main'])
+  })
+  afterEach(() => rmSync(remote, { recursive: true, force: true }))
+
+  it('creates a local tracking branch from origin/<branch> and checks it out', async () => {
+    // Make 'shared' exist only on origin.
+    execFileSync('git', ['-C', repo.dir, 'branch', 'shared'])
+    execFileSync('git', ['-C', repo.dir, 'push', '-q', 'origin', 'shared'])
+    execFileSync('git', ['-C', repo.dir, 'branch', '-D', 'shared'])
+    execFileSync('git', ['-C', repo.dir, 'fetch', '-q', 'origin'])
+    expect(await branchExists(repo.dir, 'shared')).toBe(false)
+
+    const p = wtPath('wt-from-remote')
+    await worktreeAddFromRemote(repo.dir, p, 'shared')
+    expect(await currentBranch(p)).toBe('shared')
+    expect(await branchExists(repo.dir, 'shared')).toBe(true)
+    const upstream = execFileSync(
+      'git',
+      ['-C', p, 'rev-parse', '--abbrev-ref', 'shared@{upstream}'],
+      { encoding: 'utf8' }
+    ).trim()
+    expect(upstream).toBe('origin/shared')
+  })
+})
+
+describe('checkedOutBranches', () => {
+  it('lists every branch checked out in a worktree and skips detached HEADs', async () => {
+    const p = wtPath('wt-co-1')
+    await worktreeAdd(repo.dir, p, 'co-branch')
+    execFileSync('git', ['-C', repo.dir, 'worktree', 'add', '--detach', wtPath('wt-co-det'), 'HEAD'])
+    const out = await checkedOutBranches(repo.dir)
+    expect(out).toContain('main')
+    expect(out).toContain('co-branch')
+    // The detached worktree contributes no branch name.
+    expect(out).toHaveLength(2)
   })
 })
 

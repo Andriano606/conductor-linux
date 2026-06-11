@@ -22,8 +22,10 @@ import {
   fastForwardToRemote,
   fetchQuiet,
   isGitRepo,
+  remoteBranchExists,
   worktreeAdd,
   worktreeAddExisting,
+  worktreeAddFromRemote,
   worktreePrune,
   worktreeRemove
 } from './git'
@@ -148,9 +150,13 @@ export async function createWorkspace(
   ) {
     throw new Error(`A workspace named "${branchName}" already exists.`)
   }
+  // Existing-branch flow: the branch may live locally or only on origin (a
+  // teammate's branch never checked out here) — the latter gets a local
+  // tracking branch of the same name, so no new branch name is created.
+  let existingIsLocal = false
   if (useExistingBranch) {
-    // Reuse the branch in place — it must already exist; no new branch is created.
-    if (!(await branchExists(project.repoPath, branchName))) {
+    existingIsLocal = await branchExists(project.repoPath, branchName)
+    if (!existingIsLocal && !(await remoteBranchExists(project.repoPath, branchName))) {
       throw new Error(`Branch "${branchName}" does not exist.`)
     }
   } else if (await branchExists(project.repoPath, branchName)) {
@@ -173,12 +179,16 @@ export async function createWorkspace(
   }
 
   mkdirSync(baseDir, { recursive: true })
-  if (useExistingBranch) {
+  if (useExistingBranch && existingIsLocal) {
     await worktreeAddExisting(project.repoPath, wtPath, branchName)
     // The new-branch flow already cuts from a fresh origin ref via `baseBranch`,
     // but checking out an existing local branch leaves it wherever it was — so
     // fast-forward it to origin/<branch> to pull in remote commits it's behind.
     await fastForwardToRemote(wtPath, branchName)
+  } else if (useExistingBranch) {
+    // Origin-only: cut the local tracking branch straight from the (just
+    // fetched) origin ref — already at the remote tip, nothing to fast-forward.
+    await worktreeAddFromRemote(project.repoPath, wtPath, branchName)
   } else {
     await worktreeAdd(project.repoPath, wtPath, branchName, baseBranch)
   }

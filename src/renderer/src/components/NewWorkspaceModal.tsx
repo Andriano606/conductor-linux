@@ -38,7 +38,10 @@ export function NewWorkspaceModal(): JSX.Element {
   )
 
   const [branches, setBranches] = useState<string[]>([])
-  const [localBranches, setLocalBranches] = useState<string[]>([])
+  const [existingBranches, setExistingBranches] = useState<string[]>([])
+  // Branches checked out in some worktree (incl. the main repo) — git refuses
+  // a second checkout, so they are unavailable in existing-branch mode.
+  const [checkedOut, setCheckedOut] = useState<Set<string>>(new Set())
   const [base, setBase] = useState('')
   const [search, setSearch] = useState('')
   const [loadingBranches, setLoadingBranches] = useState(true)
@@ -52,10 +55,11 @@ export function NewWorkspaceModal(): JSX.Element {
     let cancelled = false
     window.api
       .listBranches(projectId)
-      .then(({ branches, localBranches, defaultBranch }) => {
+      .then(({ branches, existingBranches, checkedOut, defaultBranch }) => {
         if (cancelled) return
         setBranches(branches)
-        setLocalBranches(localBranches)
+        setExistingBranches(existingBranches)
+        setCheckedOut(new Set(checkedOut))
         setBase(defaultBranch || branches[0] || '')
       })
       .catch((e: Error) => !cancelled && setBranchError(e.message))
@@ -72,9 +76,12 @@ export function NewWorkspaceModal(): JSX.Element {
     [workspaces, projectId]
   )
 
-  // In existing-branch mode only local branches are selectable (a remote-tracking
-  // ref would force git to create a new local branch, defeating the purpose).
-  const sourceBranches = useExisting ? localBranches : branches
+  // Existing-branch mode offers local branches plus origin-only ones (those are
+  // checked out into a local tracking branch of the same name). A branch already
+  // backing a workspace or checked out in another worktree is unavailable.
+  const sourceBranches = useExisting ? existingBranches : branches
+  const unavailable = (b: string): boolean =>
+    useExisting && (usedBranches.has(b) || checkedOut.has(b))
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -88,7 +95,7 @@ export function NewWorkspaceModal(): JSX.Element {
     [usedBranches, trimmed]
   )
 
-  const baseTaken = useExisting && !!base && usedBranches.has(base)
+  const baseTaken = useExisting && !!base && unavailable(base)
   // Block submit until branches have loaded: before that `branches` is empty and
   // `base` unset, so the non-existing-mode check would otherwise pass on name
   // alone and create a workspace off the wrong base.
@@ -100,11 +107,12 @@ export function NewWorkspaceModal(): JSX.Element {
     setUseExisting(next)
     setSearch('')
     clearError()
-    // Re-pick a valid selection for the new source list: an unused local branch
+    // Re-pick a valid selection for the new source list: a free existing branch
     // when switching into existing mode.
     if (next) {
-      const firstFree = localBranches.find((b) => !usedBranches.has(b)) || ''
-      if (!base || usedBranches.has(base) || !localBranches.includes(base)) setBase(firstFree)
+      const free = (b: string): boolean => !usedBranches.has(b) && !checkedOut.has(b)
+      const firstFree = existingBranches.find(free) || ''
+      if (!base || !free(base) || !existingBranches.includes(base)) setBase(firstFree)
     }
   }
 
@@ -172,7 +180,7 @@ export function NewWorkspaceModal(): JSX.Element {
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && filtered.length) {
-                const first = filtered.find((b) => !(useExisting && usedBranches.has(b)))
+                const first = filtered.find((b) => !unavailable(b))
                 if (first) {
                   setBase(first)
                   setSearch('')
@@ -190,21 +198,32 @@ export function NewWorkspaceModal(): JSX.Element {
             ) : filtered.length === 0 ? (
               <div className="branch-empty">
                 {useExisting && sourceBranches.length === 0
-                  ? 'Немає локальних гілок.'
+                  ? 'Немає гілок.'
                   : 'Нічого не знайдено.'}
               </div>
             ) : (
               filtered.map((b) => {
                 const taken = useExisting && usedBranches.has(b)
+                // Checked out in a worktree the app doesn't manage (e.g. the main
+                // repo) — git would refuse a second checkout.
+                const busyElsewhere = useExisting && !taken && checkedOut.has(b)
+                const blocked = taken || busyElsewhere
                 return (
                   <div
                     key={b}
-                    className={`branch-item ${b === base ? 'selected' : ''} ${taken ? 'disabled' : ''}`}
-                    onClick={() => !taken && setBase(b)}
-                    title={taken ? 'Для цієї гілки вже є воркспейс' : undefined}
+                    className={`branch-item ${b === base ? 'selected' : ''} ${blocked ? 'disabled' : ''}`}
+                    onClick={() => !blocked && setBase(b)}
+                    title={
+                      taken
+                        ? 'Для цієї гілки вже є воркспейс'
+                        : busyElsewhere
+                          ? 'Гілка вже вилучена (checked out) в іншому worktree — наприклад, в основному репозиторії'
+                          : undefined
+                    }
                   >
                     {b}
                     {taken && <span className="branch-tag"> — вже використовується</span>}
+                    {busyElsewhere && <span className="branch-tag"> — вилучена в іншому worktree</span>}
                   </div>
                 )
               })

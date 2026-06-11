@@ -9,8 +9,9 @@ let api: Api
 beforeEach(() => {
   api = setupRenderer()
   api.listBranches.mockResolvedValue({
-    branches: ['main', 'dev', 'origin/main'],
-    localBranches: ['main', 'dev'],
+    branches: ['main', 'dev', 'origin/main', 'origin/remote-only'],
+    existingBranches: ['main', 'dev', 'remote-only'],
+    checkedOut: ['main'],
     defaultBranch: 'main'
   })
   // The modal is always opened in the context of a project.
@@ -97,7 +98,8 @@ describe('NewWorkspaceModal', () => {
     // Hold the branch list pending so the modal stays in its loading state.
     let resolve!: (v: {
       branches: string[]
-      localBranches: string[]
+      existingBranches: string[]
+      checkedOut: string[]
       defaultBranch: string
     }) => void
     api.listBranches.mockReturnValue(
@@ -110,7 +112,12 @@ describe('NewWorkspaceModal', () => {
     fireEvent.change(nameInput(), { target: { value: 'newone' } })
     expect(screen.getByText('Створити')).toBeDisabled()
 
-    resolve({ branches: ['main', 'dev'], localBranches: ['main', 'dev'], defaultBranch: 'main' })
+    resolve({
+      branches: ['main', 'dev'],
+      existingBranches: ['main', 'dev'],
+      checkedOut: [],
+      defaultBranch: 'main'
+    })
     await waitFor(() => expect(screen.getByText('Створити')).not.toBeDisabled())
   })
 })
@@ -132,12 +139,40 @@ describe('NewWorkspaceModal — existing branch', () => {
     expect(api.createWorkspace).toHaveBeenCalledWith('p1', 'dev', undefined, true)
   })
 
-  it('only offers local branches (no remote-tracking refs)', async () => {
+  it('offers plain branch names only — origin-only ones included, no remote-tracking refs', async () => {
     render(<NewWorkspaceModal />)
     await waitFor(() => expect(screen.getByText('dev')).toBeInTheDocument())
     fireEvent.click(toggle())
     const list = document.querySelector('.branch-list') as HTMLElement
     expect(within(list).queryByText('origin/main')).not.toBeInTheDocument()
+    expect(within(list).queryByText('origin/remote-only')).not.toBeInTheDocument()
+    // A teammate's branch that exists only on origin is selectable by plain name.
+    expect(within(list).getByText('remote-only')).toBeInTheDocument()
+  })
+
+  it('submits an origin-only branch by its plain name', async () => {
+    render(<NewWorkspaceModal />)
+    await waitFor(() => expect(screen.getByText('dev')).toBeInTheDocument())
+    fireEvent.click(toggle())
+    const list = document.querySelector('.branch-list') as HTMLElement
+    fireEvent.click(within(list).getByText('remote-only'))
+    fireEvent.click(screen.getByText('Створити'))
+    expect(api.createWorkspace).toHaveBeenCalledWith('p1', 'remote-only', undefined, true)
+  })
+
+  it('disables a branch checked out in another worktree (e.g. the main repo)', async () => {
+    render(<NewWorkspaceModal />)
+    await waitFor(() => expect(screen.getByText('dev')).toBeInTheDocument())
+    fireEvent.click(toggle())
+    // 'main' is in checkedOut → blocked with its own tag, not selectable.
+    const items = Array.from(document.querySelectorAll('.branch-item')) as HTMLElement[]
+    const mainItem = items.find((el) => el.textContent?.startsWith('main')) as HTMLElement
+    expect(mainItem.className).toContain('disabled')
+    expect(mainItem.textContent).toContain('вилучена в іншому worktree')
+    fireEvent.click(mainItem)
+    expect(mainItem.className).not.toContain('selected')
+    // The auto-picked selection skipped the checked-out 'main' to the first free branch.
+    expect(document.querySelector('.branch-current')?.textContent).toContain('dev')
   })
 
   it('disables a branch that already backs a workspace and prevents selecting it', async () => {

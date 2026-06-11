@@ -77,12 +77,18 @@ export async function worktreeAdd(
  * List selectable base branches (local + remote-tracking), most-recently-committed
  * first, and the repo's default branch to preselect. Does a best-effort `git fetch`
  * first so remote branches are fresh; offline/no-remote just falls back to the
- * refs already on disk. `localBranches` is the subset under refs/heads — the only
- * ones that can be checked out directly into a worktree without creating a branch.
+ * refs already on disk. `existingBranches` is what the existing-branch flow can
+ * check out: local heads plus origin branches with no local counterpart (those
+ * get a local tracking branch of the same name on checkout). `checkedOut` lists
+ * branches already checked out in some worktree (incl. the main repo) — git
+ * refuses to check those out a second time.
  */
-export async function listBranches(
-  repoPath: string
-): Promise<{ branches: string[]; localBranches: string[]; defaultBranch: string }> {
+export async function listBranches(repoPath: string): Promise<{
+  branches: string[]
+  existingBranches: string[]
+  checkedOut: string[]
+  defaultBranch: string
+}> {
   await fetchQuiet(repoPath)
 
   const { stdout } = await run('git', [
@@ -104,7 +110,24 @@ export async function listBranches(
     })
     .filter((r) => r.short && !r.short.endsWith('/HEAD'))
   const branches = rows.map((r) => r.short)
-  const localBranches = rows.filter((r) => r.full.startsWith('refs/heads/')).map((r) => r.short)
+
+  // Local heads keep their name; origin refs contribute their stripped name so a
+  // teammate's branch that was never checked out here is still offered. Dedupe by
+  // name keeps each branch at its most-recently-committed position.
+  const seen = new Set<string>()
+  const existingBranches: string[] = []
+  for (const r of rows) {
+    const name = r.full.startsWith('refs/heads/')
+      ? r.short
+      : r.full.startsWith('refs/remotes/origin/')
+        ? r.short.slice('origin/'.length)
+        : ''
+    if (!name || seen.has(name)) continue
+    seen.add(name)
+    existingBranches.push(name)
+  }
+
+  const checkedOut = await checkedOutBranches(repoPath)
 
   let defaultBranch = ''
   try {
@@ -129,7 +152,17 @@ export async function listBranches(
   }
   if (!defaultBranch && branches.length) defaultBranch = branches[0]
 
-  return { branches, localBranches, defaultBranch }
+  return { branches, existingBranches, checkedOut, defaultBranch }
+}
+
+/** Branches currently checked out in any worktree of the repo (incl. the main one). */
+export async function checkedOutBranches(repoPath: string): Promise<string[]> {
+  const { stdout } = await run('git', ['-C', repoPath, 'worktree', 'list', '--porcelain'])
+  return stdout
+    .split('\n')
+    .filter((l) => l.startsWith('branch refs/heads/'))
+    .map((l) => l.slice('branch refs/heads/'.length).trim())
+    .filter(Boolean)
 }
 
 /** Add a worktree at wtPath checking out an already-existing branch. */
@@ -139,6 +172,47 @@ export async function worktreeAddExisting(
   branch: string
 ): Promise<void> {
   await run('git', ['-C', repoPath, 'worktree', 'add', wtPath, branch])
+}
+
+/** True when origin/<branch> exists as a remote-tracking ref. */
+export async function remoteBranchExists(repoPath: string, branch: string): Promise<boolean> {
+  try {
+    await run('git', [
+      '-C',
+      repoPath,
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `refs/remotes/origin/${branch}`
+    ])
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Add a worktree for a branch that exists only on origin: create the local
+ * branch from origin/<branch> set up to track it — the explicit form of the
+ * `git checkout <branch>` remote DWIM, which `worktree add <path> <branch>`
+ * does not perform on its own.
+ */
+export async function worktreeAddFromRemote(
+  repoPath: string,
+  wtPath: string,
+  branch: string
+): Promise<void> {
+  await run('git', [
+    '-C',
+    repoPath,
+    'worktree',
+    'add',
+    '--track',
+    '-b',
+    branch,
+    wtPath,
+    `origin/${branch}`
+  ])
 }
 
 /**

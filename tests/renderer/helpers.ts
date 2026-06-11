@@ -48,7 +48,12 @@ export function makeApi() {
     deleteProject: vi.fn(async () => {}),
     onProjectsChanged: vi.fn(() => () => {}),
     listWorkspaces: vi.fn(async () => [] as Workspace[]),
-    listBranches: vi.fn(async () => ({ branches: ['main'], defaultBranch: 'main' })),
+    listBranches: vi.fn(async () => ({
+      branches: ['main'],
+      existingBranches: ['main'],
+      checkedOut: [] as string[],
+      defaultBranch: 'main'
+    })),
     currentBranch: vi.fn(async () => 'main'),
     createWorkspace: vi.fn(async () => mkWs({ id: 'new' })),
     runWorkspace: vi.fn(async () => {}),

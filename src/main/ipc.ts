@@ -48,7 +48,9 @@ export function registerIpc(): void {
   ipcMain.handle('settings:isGitRepo', (_e, path: string) => isGitRepo(path))
   ipcMain.handle('git:branches', (_e, projectId: string) => {
     const project = getProject(projectId)
-    return project ? listBranches(project.repoPath) : { branches: [], defaultBranch: '' }
+    return project
+      ? listBranches(project.repoPath)
+      : { branches: [], existingBranches: [], checkedOut: [], defaultBranch: '' }
   })
   ipcMain.handle('git:currentBranch', (_e, id: string) => {
     const ws = getWorkspaces().find((w) => w.id === id)

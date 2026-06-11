@@ -46,10 +46,12 @@ vi.mock('../../src/main/store', () => store)
 const git = vi.hoisted(() => ({
   isGitRepo: vi.fn(async () => true),
   branchExists: vi.fn(async () => false),
+  remoteBranchExists: vi.fn(async () => false),
   fetchQuiet: vi.fn(async () => {}),
   fastForwardToRemote: vi.fn(async () => false),
   worktreeAdd: vi.fn(async () => {}),
   worktreeAddExisting: vi.fn(async () => {}),
+  worktreeAddFromRemote: vi.fn(async () => {}),
   worktreePrune: vi.fn(async () => {}),
   worktreeRemove: vi.fn(async () => {}),
   branchDelete: vi.fn(async () => {})
@@ -122,6 +124,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   git.isGitRepo.mockResolvedValue(true)
   git.branchExists.mockResolvedValue(false)
+  git.remoteBranchExists.mockResolvedValue(false)
   git.worktreeAdd.mockResolvedValue(undefined)
   git.worktreeRemove.mockResolvedValue(undefined)
   ptym.runTask.mockResolvedValue(0)
@@ -280,8 +283,25 @@ describe('createWorkspace with an existing branch', () => {
     expect(git.fastForwardToRemote).toHaveBeenCalledWith('/wt/proj/feature-x', 'feature-x')
   })
 
-  it('throws when the selected branch does not exist', async () => {
+  it('checks out an origin-only branch via a local tracking branch', async () => {
     git.branchExists.mockResolvedValue(false)
+    git.remoteBranchExists.mockResolvedValue(true)
+    const ws = await createWorkspace('p1', 'teammate-br', undefined, true)
+    expect(ws.branch).toBe('teammate-br')
+    expect(git.worktreeAddFromRemote).toHaveBeenCalledWith(
+      '/repo',
+      '/wt/proj/teammate-br',
+      'teammate-br'
+    )
+    expect(git.worktreeAddExisting).not.toHaveBeenCalled()
+    expect(git.worktreeAdd).not.toHaveBeenCalled()
+    // Cut straight from the fresh origin ref — no fast-forward needed.
+    expect(git.fastForwardToRemote).not.toHaveBeenCalled()
+  })
+
+  it('throws when the selected branch exists neither locally nor on origin', async () => {
+    git.branchExists.mockResolvedValue(false)
+    git.remoteBranchExists.mockResolvedValue(false)
     await expect(createWorkspace('p1', 'ghost', undefined, true)).rejects.toThrow(/does not exist/)
   })
 
