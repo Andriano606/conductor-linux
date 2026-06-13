@@ -158,6 +158,11 @@ export function write(id: string, kind: PtyKind, data: string): void {
   entries.get(key(id, kind))?.proc?.write(data)
 }
 
+/** Ask the renderer to switch the given workspace to a terminal tab. */
+export function focusTerminal(id: string, kind: PtyKind): void {
+  send('pty:focus', { id, kind })
+}
+
 export function resize(id: string, kind: PtyKind, cols: number, rows: number): void {
   const proc = entries.get(key(id, kind))?.proc
   if (!proc) return

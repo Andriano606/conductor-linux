@@ -123,7 +123,8 @@ export function makeApi() {
     resizePty: vi.fn(),
     showTermMenu: vi.fn(),
     onPtyData: vi.fn(() => () => {}),
-    onPtyExit: vi.fn(() => () => {})
+    onPtyExit: vi.fn(() => () => {}),
+    onPtyFocus: vi.fn(() => () => {})
   }
 }
 

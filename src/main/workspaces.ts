@@ -1,6 +1,8 @@
+import { execFile } from 'child_process'
 import { randomUUID } from 'crypto'
 import { existsSync, mkdirSync } from 'fs'
 import { basename, join } from 'path'
+import { promisify } from 'util'
 import type { ChatSession, Project, ProjectScripts, Workspace } from '../shared/types'
 import {
   addProject,
@@ -41,8 +43,9 @@ import {
 } from './git'
 import { startBranchWatch, stopBranchWatch } from './branchWatcher'
 import { buildEnv } from './env'
-import { runTask, startShell, killWorkspace, stopTask } from './ptyManager'
+import { focusTerminal, runTask, startShell, write, killWorkspace, stopTask } from './ptyManager'
 import {
+  chatInfo,
   deleteChatHistory,
   killChat,
   setChatConfigDir,
@@ -539,6 +542,62 @@ export function ensureShell(id: string): void {
   const project = getProject(ws.projectId)
   if (!project) return
   startShell({ id: ws.id, cwd: ws.path, env: buildEnv(ws, project), cols: 80, rows: 24 })
+}
+
+const runCmd = promisify(execFile)
+
+/** Single-quote a value so it survives `bash -c`. */
+function shq(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+/**
+ * Handle the auth local commands (/login, /logout, /status) for a chat session.
+ * Acts on that session's Claude profile (its CLAUDE_CONFIG_DIR), so login/logout/
+ * status target the right account. `login` is interactive (browser OAuth), so it
+ * runs in the workspace shell and the UI is switched to the Terminal tab; logout
+ * and status are quick and their output is reported back into the transcript.
+ */
+export function handleChatAuth(
+  sessionId: string,
+  action: 'login' | 'logout' | 'status',
+  useConsole = false
+): void {
+  const found = findSession(sessionId)
+  if (!found) return
+  const { ws, session } = found
+  const project = getProject(ws.projectId)
+  if (!project) return
+  if (ws.status === 'archived' || !existsSync(ws.path)) {
+    chatInfo(sessionId, 'Робочий простір недоступний.')
+    return
+  }
+  const configDir = session.claudeConfigProfileId
+    ? getClaudeProfiles().find((p) => p.id === session.claudeConfigProfileId)?.path
+    : undefined
+
+  if (action === 'login') {
+    ensureShell(ws.id) // idempotent; uses buildEnv
+    const prefix = configDir ? `CLAUDE_CONFIG_DIR=${shq(configDir)} ` : ''
+    write(ws.id, 'shell', `${prefix}claude auth login${useConsole ? ' --console' : ''}\n`)
+    focusTerminal(ws.id, 'shell')
+    chatInfo(
+      sessionId,
+      'Запускаю вхід у вкладці «Термінал». Після завершення перезапусти сесію (напр. /model), щоб застосувати нові облікові дані.'
+    )
+    return
+  }
+
+  // logout / status — quick, non-interactive. Run through a login shell (like the
+  // chat proc) so `claude` resolves from PATH; buildEnv strips the AppImage leak
+  // vars that would otherwise break the shell rc under the packaged app.
+  const env = { ...buildEnv(ws, project), ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}) }
+  const cmd = action === 'logout' ? 'claude auth logout' : 'claude auth status --text'
+  runCmd('/bin/bash', ['-lc', cmd], { env, timeout: 15_000 })
+    .then(({ stdout, stderr }) => chatInfo(sessionId, (stdout || stderr).trim() || 'Готово.'))
+    .catch((err: { stderr?: string; message?: string }) =>
+      chatInfo(sessionId, `Помилка: ${String(err?.stderr || err?.message || err).trim()}`)
+    )
 }
 
 /** Run the configured run script in the workspace (does not wait for it). */

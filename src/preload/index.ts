@@ -151,6 +151,11 @@ const api = {
     const listener = (_e: unknown, d: PtyExit): void => cb(d)
     ipcRenderer.on('pty:exit', listener)
     return () => ipcRenderer.removeListener('pty:exit', listener)
+  },
+  onPtyFocus: (cb: (d: { id: string; kind: PtyKind }) => void): (() => void) => {
+    const listener = (_e: unknown, d: { id: string; kind: PtyKind }): void => cb(d)
+    ipcRenderer.on('pty:focus', listener)
+    return () => ipcRenderer.removeListener('pty:focus', listener)
   }
 }
 

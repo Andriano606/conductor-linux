@@ -427,7 +427,7 @@ const answerInitialize = (payload: Record<string, unknown>): void => {
 }
 
 /** App-owned commands merged into the list — filtered out when asserting CLI-only behavior. */
-const LOCAL_NAMES = new Set(['model', 'effort', 'plan'])
+const LOCAL_NAMES = new Set(['model', 'effort', 'plan', 'login', 'logout', 'status'])
 const cliOnly = (cmds?: { name: string }[]): { name: string }[] =>
   (cmds ?? []).filter((c) => !LOCAL_NAMES.has(c.name))
 
@@ -453,7 +453,16 @@ describe('slash commands', () => {
     })
     const cmds = attachChat('w1').commands ?? []
     // CLI commands first (descriptions intact), then the local ones.
-    expect(cmds.map((c) => c.name)).toEqual(['clear', 'compact', 'model', 'effort', 'plan'])
+    expect(cmds.map((c) => c.name)).toEqual([
+      'clear',
+      'compact',
+      'model',
+      'effort',
+      'plan',
+      'login',
+      'logout',
+      'status'
+    ])
     expect(cmds[0]).toMatchObject({ description: 'Clear conversation history', argumentHint: '[name]' })
     expect(cmds[2]).toMatchObject({ name: 'model', argumentHint: '[model]' })
     expect(chatEvents().some((p) => p.ev.type === 'commands')).toBe(true)
@@ -465,8 +474,16 @@ describe('slash commands', () => {
       commands: [{ name: 'clear' }],
       models: [{ value: 'haiku', displayName: 'Haiku' }] // no supportsEffort
     })
-    // /effort hidden (no model supports it), /model shown (a model exists), /plan always.
-    expect((attachChat('w1').commands ?? []).map((c) => c.name)).toEqual(['clear', 'model', 'plan'])
+    // /effort hidden (no model supports it), /model shown (a model exists), /plan
+    // and the auth action commands always offered.
+    expect((attachChat('w1').commands ?? []).map((c) => c.name)).toEqual([
+      'clear',
+      'model',
+      'plan',
+      'login',
+      'logout',
+      'status'
+    ])
   })
 
   it('a CLI command of the same name shadows the local one (native wins)', () => {

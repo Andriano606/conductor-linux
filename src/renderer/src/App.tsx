@@ -44,6 +44,13 @@ export function App(): JSX.Element {
     const offProjects = window.api.onProjectsChanged((next) => setProjects(next))
     const offPrompts = window.api.onCustomPromptsChanged((next) => setCustomPrompts(next))
     const offProfiles = window.api.onClaudeProfilesChanged((next) => setClaudeProfiles(next))
+    // /login asks the UI to surface the workspace's terminal so the user sees the
+    // interactive OAuth flow.
+    const offFocus = window.api.onPtyFocus(({ id, kind }) => {
+      const s = useStore.getState()
+      if (s.activeId !== id) s.setActive(id)
+      s.setKind(kind)
+    })
     const offChanged = window.api.onWorkspacesChanged((next) => {
       const state = useStore.getState()
       const prev = state.workspaces
@@ -75,6 +82,7 @@ export function App(): JSX.Element {
       offProjects()
       offPrompts()
       offProfiles()
+      offFocus()
       offChanged()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

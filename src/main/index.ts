@@ -6,12 +6,13 @@ import { stopAllBranchWatches } from './branchWatcher'
 import { killAll, setMainWindow } from './ptyManager'
 import {
   killAllChats,
+  onChatAuth,
   onChatParams,
   onChatSessionId,
   setChatStorageDir,
   setChatWindow
 } from './claudeChat'
-import { restoreSessions } from './workspaces'
+import { handleChatAuth, restoreSessions } from './workspaces'
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -53,6 +54,7 @@ app.whenReady().then(() => {
   // and the visible transcripts so the chat history survives restarts/archive.
   onChatSessionId(updateSessionSessionId)
   onChatParams(updateSessionClaudeParams)
+  onChatAuth(handleChatAuth)
   setChatStorageDir(join(app.getPath('userData'), 'chats'))
   registerIpc()
   // Reaps orphaned processes from the previous session before restarting Claude;

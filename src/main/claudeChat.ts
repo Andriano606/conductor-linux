@@ -116,6 +116,9 @@ interface ParamsPatch {
   permissionMode?: string
 }
 
+/** The action a local auth command (/login, /logout, /status) requests. */
+type AuthAction = 'login' | 'logout' | 'status'
+
 const MAX_ITEMS = 500
 const STDERR_TAIL = 2000
 const SAVE_DEBOUNCE_MS = 500
@@ -128,6 +131,8 @@ let mainWC: WebContents | null = null
 let sessionIdSink: (id: string, sessionId: string | undefined) => void = () => {}
 /** Persists a runtime choice (local /model, /effort, /plan commands). */
 let paramsSink: (id: string, patch: ParamsPatch) => void = () => {}
+/** Handles the auth local commands (/login, /logout, /status) — wired in main. */
+let authSink: (sessionId: string, action: AuthAction, useConsole?: boolean) => void = () => {}
 /** Directory transcripts are persisted to; null (tests) = memory only. */
 let storageDir: string | null = null
 
@@ -141,6 +146,18 @@ export function onChatSessionId(cb: (id: string, sessionId: string | undefined) 
 
 export function onChatParams(cb: (id: string, patch: ParamsPatch) => void): void {
   paramsSink = cb
+}
+
+export function onChatAuth(
+  cb: (sessionId: string, action: AuthAction, useConsole?: boolean) => void
+): void {
+  authSink = cb
+}
+
+/** Push an info line into a session's transcript (used by the auth handler). */
+export function chatInfo(id: string, text: string): void {
+  const e = entries.get(id)
+  if (e) info(id, e, text)
 }
 
 /**
@@ -389,6 +406,12 @@ interface LocalCommand {
   applyArg?: (id: string, e: Entry, value: string) => void
   /** True when applying restarts the session, so it is refused mid-turn. */
   requiresIdle?: boolean
+  /**
+   * Action-style command: runs a side effect instead of opening a value picker.
+   * When set, the command is offered even with no `choices`, and a bare or
+   * argument invocation calls this directly. Used by /login, /logout, /status.
+   */
+  run?: (id: string, e: Entry, arg?: string) => void
 }
 
 const DEFAULT_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
@@ -480,6 +503,30 @@ const LOCAL_COMMANDS: LocalCommand[] = [
       const target = value === cur ? (cur === 'plan' ? 'default' : 'plan') : value
       applyPermissionMode(id, e, target)
     }
+  },
+  {
+    // Interactive OAuth — runs in the workspace's Terminal tab (the handler in
+    // workspaces.ts opens the shell and switches the UI to it). `/login console`
+    // logs into the Anthropic Console (API billing) instead of a subscription.
+    name: 'login',
+    description: 'Увійти в акаунт Claude (відкриє браузер у вкладці «Термінал»)',
+    argumentHint: '[console]',
+    choices: () => [],
+    run: (id, _e, arg) => authSink(id, 'login', arg?.toLowerCase() === 'console')
+  },
+  {
+    name: 'logout',
+    description: 'Вийти з акаунта Claude',
+    argumentHint: '',
+    choices: () => [],
+    run: (id) => authSink(id, 'logout')
+  },
+  {
+    name: 'status',
+    description: 'Показати статус автентифікації Claude',
+    argumentHint: '',
+    choices: () => [],
+    run: (id) => authSink(id, 'status')
   }
 ]
 
@@ -592,6 +639,11 @@ function dispatchLocalCommand(id: string, e: Entry, text: string): boolean {
   // Only restart-based commands need an idle session; live ones (/plan) don't.
   if (cmd.requiresIdle && e.busy) {
     info(id, e, 'Зачекай, доки Claude завершить поточну відповідь, перш ніж змінювати налаштування.')
+    return true
+  }
+  // Action-style command (/login, /logout, /status): run the side effect.
+  if (cmd.run) {
+    cmd.run(id, e, m[2]?.trim())
     return true
   }
   const choices = cmd.choices(e)
@@ -1050,7 +1102,7 @@ function enforcePermissionMode(e: Entry): void {
 function setCommands(id: string, e: Entry, cliCommands: ChatCommand[]): void {
   const cliNames = new Set(cliCommands.map((c) => c.name))
   const locals = LOCAL_COMMANDS.filter(
-    (lc) => !cliNames.has(lc.name) && lc.choices(e).length > 0
+    (lc) => !cliNames.has(lc.name) && (!!lc.run || lc.choices(e).length > 0)
   )
   e.localCommandNames = new Set(locals.map((lc) => lc.name))
   e.commands = [
