@@ -80,6 +80,14 @@ export interface Workspace {
    * the conversation is resumed (--resume) after an app restart.
    */
   claudeSessionId?: string
+  /**
+   * Model/effort/permission-mode chosen at runtime via the local /model,
+   * /effort and /plan commands, persisted so the choice survives restarts and
+   * archive/restore (passed as --model/--effort/--permission-mode on respawn).
+   */
+  claudeModel?: string
+  claudeEffort?: string
+  claudePermissionMode?: string
 }
 
 /**

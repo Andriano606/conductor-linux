@@ -338,6 +338,31 @@ describe('finishSetup', () => {
     expect(store.updateWorkspaceSetupStatus).toHaveBeenCalledWith('a', 'success')
   })
 
+  it('reapplies the persisted model/effort/plan mode (e.g. restored from archive)', async () => {
+    // restoreWorktree flips an archived workspace to setting_up and calls
+    // finishSetup, which must restart claude with the persisted params intact.
+    store._set({ ...settings }, [mkProject()], [
+      mkWs({
+        id: 'a',
+        status: 'setting_up',
+        claudeSessionId: 'sess-9',
+        claudeModel: 'opus[1m]',
+        claudeEffort: 'max',
+        claudePermissionMode: 'plan'
+      })
+    ])
+    await finishSetup('a', vi.fn())
+    expect(chat.startChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'a',
+        resume: 'sess-9',
+        model: 'opus[1m]',
+        effort: 'max',
+        permissionMode: 'plan'
+      })
+    )
+  })
+
   it('marks setup as error when the setup script exits non-zero', async () => {
     store._set({ ...settings }, [mkProject({ setupScript: '/setup.sh' })], [
       mkWs({ id: 'a', status: 'setting_up' })
@@ -461,6 +486,31 @@ describe('restoreSessions healing matrix', () => {
     await restoreSessions()
     expect(chat.startChat).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'a', args: '--dangerously-skip-permissions' })
+    )
+  })
+
+  it('reapplies the persisted model/effort/plan mode on app restart', async () => {
+    store._set({ ...settings }, [mkProject()], [
+      mkWs({
+        id: 'a',
+        status: 'active',
+        path: '/wt/proj/a',
+        claudeSessionId: 'sess-1',
+        claudeModel: 'sonnet',
+        claudeEffort: 'high',
+        claudePermissionMode: 'plan'
+      })
+    ])
+    fsm.existsSync.mockReturnValue(true)
+    await restoreSessions()
+    expect(chat.startChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'a',
+        resume: 'sess-1',
+        model: 'sonnet',
+        effort: 'high',
+        permissionMode: 'plan'
+      })
     )
   })
 

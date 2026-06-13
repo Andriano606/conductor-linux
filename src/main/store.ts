@@ -168,6 +168,32 @@ export function updateWorkspaceSessionId(id: string, sessionId: string | undefin
 }
 
 /**
+ * Persist a runtime model/effort choice (from the local /model, /effort
+ * commands) so it is reapplied as --model/--effort on the next (re)spawn.
+ */
+export function updateWorkspaceClaudeParams(
+  id: string,
+  patch: { model?: string; effort?: string; permissionMode?: string }
+): void {
+  const ws = data.workspaces.find((w) => w.id === id)
+  if (!ws) return
+  let changed = false
+  if ('model' in patch && ws.claudeModel !== patch.model) {
+    ws.claudeModel = patch.model
+    changed = true
+  }
+  if ('effort' in patch && ws.claudeEffort !== patch.effort) {
+    ws.claudeEffort = patch.effort
+    changed = true
+  }
+  if ('permissionMode' in patch && ws.claudePermissionMode !== patch.permissionMode) {
+    ws.claudePermissionMode = patch.permissionMode
+    changed = true
+  }
+  if (changed) persist()
+}
+
+/**
  * Lowest free port starting at the configured startPort, skipping ports already
  * assigned to a workspace. Exposed to scripts as CONDUCTOR_PORT. Ports are
  * unique across all projects so two running workspaces never collide.

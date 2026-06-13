@@ -239,7 +239,10 @@ export async function finishSetup(id: string, onChange: () => void): Promise<voi
     cwd: ws.path,
     env,
     args: settings.claudeArgs,
-    resume: ws.claudeSessionId
+    resume: ws.claudeSessionId,
+    model: ws.claudeModel,
+    effort: ws.claudeEffort,
+    permissionMode: ws.claudePermissionMode
   })
   onChange()
   // Run the setup script alongside the now-live Claude session; its exit code
@@ -299,7 +302,10 @@ export async function restoreSessions(): Promise<void> {
       cwd: ws.path,
       env: buildEnv(ws, project),
       args: settings.claudeArgs,
-      resume: ws.claudeSessionId
+      resume: ws.claudeSessionId,
+      model: ws.claudeModel,
+      effort: ws.claudeEffort,
+      permissionMode: ws.claudePermissionMode
     })
   }
 }
@@ -339,7 +345,10 @@ export function ensureClaudeChat(id: string): void {
     cwd: ws.path,
     env: buildEnv(ws, project),
     args: getSettings().claudeArgs,
-    resume: ws.claudeSessionId
+    resume: ws.claudeSessionId,
+    model: ws.claudeModel,
+    effort: ws.claudeEffort,
+    permissionMode: ws.claudePermissionMode
   })
 }
 

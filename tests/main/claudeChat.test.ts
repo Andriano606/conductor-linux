@@ -18,6 +18,7 @@ import {
   interruptChat,
   killAllChats,
   killChat,
+  onChatParams,
   onChatSessionId,
   sendChatMessage,
   setChatStorageDir,
@@ -83,6 +84,7 @@ beforeEach(() => {
   send = vi.fn()
   setChatWindow({ send, isDestroyed: () => false } as never)
   onChatSessionId(() => {})
+  onChatParams(() => {})
 })
 
 afterEach(() => {
@@ -410,6 +412,11 @@ const answerInitialize = (payload: Record<string, unknown>): void => {
   })
 }
 
+/** App-owned commands merged into the list — filtered out when asserting CLI-only behavior. */
+const LOCAL_NAMES = new Set(['model', 'effort', 'plan'])
+const cliOnly = (cmds?: { name: string }[]): { name: string }[] =>
+  (cmds ?? []).filter((c) => !LOCAL_NAMES.has(c.name))
+
 describe('slash commands', () => {
   it('sends the initialize handshake at spawn', () => {
     startChat(baseOpts)
@@ -418,20 +425,48 @@ describe('slash commands', () => {
     expect((req.request as { subtype: string }).subtype).toBe('initialize')
   })
 
-  it('shows exactly the CLI commands (with descriptions), nothing emulated', () => {
+  it('keeps the CLI commands (with descriptions) and appends local /model, /effort, /plan', () => {
     startChat(baseOpts)
     answerInitialize({
       commands: [
         { name: 'clear', description: 'Clear conversation history', argumentHint: '[name]' },
         { name: 'compact', description: 'Summarize the conversation' }
       ],
-      // Models present in the payload must NOT add /model or /effort anymore.
-      models: [{ value: 'opus', displayName: 'Opus', supportsEffort: true }]
+      models: [
+        { value: 'default', displayName: 'Default', supportsEffort: true },
+        { value: 'sonnet', displayName: 'Sonnet', supportsEffort: true }
+      ]
     })
     const cmds = attachChat('w1').commands ?? []
-    expect(cmds.map((c) => c.name)).toEqual(['clear', 'compact'])
+    // CLI commands first (descriptions intact), then the local ones.
+    expect(cmds.map((c) => c.name)).toEqual(['clear', 'compact', 'model', 'effort', 'plan'])
     expect(cmds[0]).toMatchObject({ description: 'Clear conversation history', argumentHint: '[name]' })
+    expect(cmds[2]).toMatchObject({ name: 'model', argumentHint: '[model]' })
     expect(chatEvents().some((p) => p.ev.type === 'commands')).toBe(true)
+  })
+
+  it('hides /effort when no model supports it; /model needs models, /plan is always offered', () => {
+    startChat(baseOpts)
+    answerInitialize({
+      commands: [{ name: 'clear' }],
+      models: [{ value: 'haiku', displayName: 'Haiku' }] // no supportsEffort
+    })
+    // /effort hidden (no model supports it), /model shown (a model exists), /plan always.
+    expect((attachChat('w1').commands ?? []).map((c) => c.name)).toEqual(['clear', 'model', 'plan'])
+  })
+
+  it('a CLI command of the same name shadows the local one (native wins)', () => {
+    startChat(baseOpts)
+    answerInitialize({
+      commands: [{ name: 'model', description: 'native model command' }],
+      models: [{ value: 'default', displayName: 'Default', supportsEffort: true }]
+    })
+    const cmds = attachChat('w1').commands ?? []
+    // Only the CLI's /model (one entry), and a typed /model goes to the CLI.
+    expect(cmds.filter((c) => c.name === 'model')).toHaveLength(1)
+    expect(cmds[0].description).toBe('native model command')
+    sendChatMessage('w1', '/model')
+    expect(lastWritten()).toMatchObject({ type: 'user', message: { content: [{ text: '/model' }] } })
   })
 
   it('drops exact duplicates but keeps distinct commands that share a name', () => {
@@ -448,8 +483,7 @@ describe('slash commands', () => {
       ],
       models: []
     })
-    const cmds = attachChat('w1').commands ?? []
-    expect(cmds).toEqual([
+    expect(cliOnly(attachChat('w1').commands)).toEqual([
       { name: 'compact', description: 'Summarize the conversation', argumentHint: undefined },
       { name: 'commit', description: 'Follow project conventions', argumentHint: undefined },
       { name: 'commit', description: 'Concise message', argumentHint: undefined }
@@ -464,7 +498,7 @@ describe('slash commands', () => {
       session_id: 's1',
       slash_commands: ['compact', 'clear', 'review']
     })
-    expect(attachChat('w1').commands).toEqual([
+    expect(cliOnly(attachChat('w1').commands)).toEqual([
       { name: 'compact' },
       { name: 'clear' },
       { name: 'review' }
@@ -479,7 +513,7 @@ describe('slash commands', () => {
       session_id: 's1',
       slash_commands: ['compact', 'clear', 'compact', 'clear']
     })
-    expect(attachChat('w1').commands).toEqual([{ name: 'compact' }, { name: 'clear' }])
+    expect(cliOnly(attachChat('w1').commands)).toEqual([{ name: 'compact' }, { name: 'clear' }])
   })
 
   it('an init with a changed session id (e.g. /clear) drops the transcript', () => {
@@ -522,18 +556,14 @@ describe('slash commands', () => {
     expect(items).toHaveLength(1)
   })
 
-  it('forwards every /command to the CLI as a plain message (no local handling)', () => {
+  it('forwards a non-local /command to the CLI as a plain message', () => {
     startChat(baseOpts)
-    answerInitialize({ commands: [{ name: 'clear' }], models: [{ value: 'opus' }] })
-    for (const text of ['/model sonnet', '/effort high', '/clear']) {
-      sendChatMessage('w1', text)
-      expect(lastWritten()).toMatchObject({
-        type: 'user',
-        message: { content: [{ type: 'text', text }] }
-      })
-    }
-    // No extra process was spawned and no pending picker was opened.
-    expect(spawned).toHaveLength(1)
+    answerInitialize({ commands: [{ name: 'clear' }], models: [] })
+    sendChatMessage('w1', '/clear')
+    expect(lastWritten()).toMatchObject({
+      type: 'user',
+      message: { content: [{ type: 'text', text: '/clear' }] }
+    })
     expect(attachChat('w1').pending).toBeNull()
   })
 
@@ -578,6 +608,283 @@ describe('slash commands', () => {
     const items = attachChat('w1').items
     expect(items[items.length - 1].role).toBe('info')
     expect(items[items.length - 1].text).toContain('Not enough messages')
+  })
+})
+
+describe('local commands (/model, /effort)', () => {
+  const MODELS = [
+    { value: 'default', displayName: 'Default', supportsEffort: true, supportedEffortLevels: ['low', 'high'] },
+    { value: 'sonnet', displayName: 'Sonnet', supportsEffort: true }
+  ]
+  /** Spawn, report a session id, and advertise commands + models. */
+  const ready = (): void => {
+    startChat(baseOpts)
+    last().line({ type: 'system', subtype: 'init', session_id: 'sess-1' })
+    answerInitialize({ commands: [{ name: 'clear' }], models: MODELS })
+  }
+  /** argv of the most recently spawned claude process. */
+  const lastArgv = (): string => (spawnArgs[spawnArgs.length - 1] as [string, string[]])[1][1]
+
+  it('buildCommand passes --model/--effort, after user args so a runtime choice wins', () => {
+    startChat({ ...baseOpts, args: '--model opus', model: 'sonnet', effort: 'high' })
+    const argv = lastArgv()
+    expect(argv).toContain('--effort high')
+    // Both --model flags are present; ours (sonnet) comes last and therefore wins.
+    expect(argv.lastIndexOf('--model sonnet')).toBeGreaterThan(argv.indexOf('--model opus'))
+  })
+
+  it('an inline value applies directly: persists and restarts resuming the session', () => {
+    const sink = vi.fn()
+    onChatParams(sink)
+    ready()
+    sendChatMessage('w1', '/model sonnet')
+    // Not forwarded to the CLI as a user message, and persisted.
+    expect(sink).toHaveBeenCalledWith('w1', { model: 'sonnet' })
+    expect(attachChat('w1').items.some((it) => it.role === 'user')).toBe(false)
+    // The restart happens once the old proc is gone, carrying the new flag + resume.
+    const before = spawned.length
+    last().emit('exit', 0)
+    expect(spawned.length).toBe(before + 1)
+    expect(lastArgv()).toContain('--model sonnet')
+    expect(lastArgv()).toContain('--resume sess-1')
+  })
+
+  it('/effort offers the current model levels and applies the chosen one', () => {
+    const sink = vi.fn()
+    onChatParams(sink)
+    ready()
+    sendChatMessage('w1', '/effort')
+    const pending = attachChat('w1').pending
+    expect(pending?.kind).toBe('question')
+    if (pending?.kind !== 'question') throw new Error('expected question')
+    expect(pending.questions[0].options.map((o) => o.label)).toEqual(['low', 'high'])
+    answerChat('w1', {
+      kind: 'question',
+      requestId: pending.requestId,
+      answers: { [pending.questions[0].question]: 'high' }
+    })
+    expect(sink).toHaveBeenCalledWith('w1', { effort: 'high' })
+    expect(attachChat('w1').pending).toBeNull()
+  })
+
+  it('/model with no value opens a picker listing every model', () => {
+    ready()
+    sendChatMessage('w1', '/model')
+    const pending = attachChat('w1').pending
+    if (pending?.kind !== 'question') throw new Error('expected question')
+    expect(pending.questions[0].options.map((o) => o.label)).toEqual(['Default', 'Sonnet'])
+  })
+
+  it('rejects an unknown value without restarting', () => {
+    const sink = vi.fn()
+    onChatParams(sink)
+    ready()
+    const before = spawned.length
+    sendChatMessage('w1', '/model gpt')
+    expect(sink).not.toHaveBeenCalled()
+    last().emit('exit', 0) // even if the proc died, nothing was queued to respawn
+    expect(spawned.length).toBe(before)
+    expect(attachChat('w1').items.at(-1)?.text).toContain('Невідоме значення')
+  })
+
+  it('refuses to change params mid-turn (while busy)', () => {
+    const sink = vi.fn()
+    onChatParams(sink)
+    ready()
+    sendChatMessage('w1', 'hi') // turn in flight ⇒ busy
+    sendChatMessage('w1', '/model sonnet')
+    expect(sink).not.toHaveBeenCalled()
+    expect(attachChat('w1').items.at(-1)?.text).toContain('Зачекай')
+  })
+
+  it('reapplies a persisted model/effort on the next spawn', () => {
+    startChat({ ...baseOpts, model: 'sonnet', effort: 'high' })
+    expect(lastArgv()).toContain('--model sonnet')
+    expect(lastArgv()).toContain('--effort high')
+  })
+
+  it('does not double-spawn if a message arrives during the restart window', () => {
+    ready()
+    sendChatMessage('w1', '/model sonnet') // kills the old proc, awaits its exit
+    const before = spawned.length
+    sendChatMessage('w1', 'hi') // ensureChat must NOT spawn a second proc yet
+    expect(spawned.length).toBe(before)
+    last().emit('exit', 0) // old proc gone ⇒ exactly one respawn
+    expect(spawned.length).toBe(before + 1)
+  })
+
+  it('/plan is always offered, even without models', () => {
+    startChat(baseOpts)
+    answerInitialize({ commands: [{ name: 'clear' }], models: [] })
+    expect((attachChat('w1').commands ?? []).map((c) => c.name)).toContain('plan')
+  })
+
+  it('/plan switches mode live via a control request — persisted, no restart', () => {
+    const sink = vi.fn()
+    onChatParams(sink)
+    ready()
+    const before = spawned.length
+    sendChatMessage('w1', '/plan plan')
+    expect(sink).toHaveBeenCalledWith('w1', { permissionMode: 'plan' })
+    // A set_permission_mode control request is sent; the session is NOT restarted.
+    expect(lastWritten()).toMatchObject({
+      type: 'control_request',
+      request: { subtype: 'set_permission_mode', mode: 'plan' }
+    })
+    expect(spawned.length).toBe(before)
+    expect(attachChat('w1').items.at(-1)?.role).toBe('info')
+  })
+
+  it('bare /plan leads with the actionable option for the current mode', () => {
+    const sink = vi.fn()
+    onChatParams(sink)
+    ready() // starts in default
+    sendChatMessage('w1', '/plan')
+    let pending = attachChat('w1').pending
+    if (pending?.kind !== 'question') throw new Error('expected picker')
+    let options = pending.questions[0].options
+    expect(options).toHaveLength(2)
+    // In default the first (action) option turns planning ON; the second is current.
+    expect(options[0].label).toContain('Увімкнути план мод')
+    expect(options[1].label).toContain('Звичайний режим')
+    answerChat('w1', {
+      kind: 'question',
+      requestId: pending.requestId,
+      answers: { [pending.questions[0].question]: options[0].label }
+    })
+    expect(sink).toHaveBeenLastCalledWith('w1', { permissionMode: 'plan' })
+    expect(attachChat('w1').items.at(-1)?.text).toContain('Увімкнено режим планування')
+
+    // Now in plan, the first (action) option is "Вимкнути план мод".
+    sendChatMessage('w1', '/plan')
+    pending = attachChat('w1').pending
+    if (pending?.kind !== 'question') throw new Error('expected picker')
+    options = pending.questions[0].options
+    expect(options[0].label).toContain('Вимкнути план мод')
+    // Picking it turns planning off.
+    answerChat('w1', {
+      kind: 'question',
+      requestId: pending.requestId,
+      answers: { [pending.questions[0].question]: options[0].label }
+    })
+    expect(sink).toHaveBeenLastCalledWith('w1', { permissionMode: 'default' })
+    expect(attachChat('w1').items.at(-1)?.text).toContain('Вимкнено режим планування')
+  })
+
+  it('picking the current mode in the picker is a no-op (no spam)', () => {
+    const sink = vi.fn()
+    onChatParams(sink)
+    ready() // already in default
+    sendChatMessage('w1', '/plan')
+    const pending = attachChat('w1').pending
+    if (pending?.kind !== 'question') throw new Error('expected picker')
+    const offLabel = pending.questions[0].options[1].label // the current (default) option
+    const writes = last().stdin.write.mock.calls.length
+    answerChat('w1', {
+      kind: 'question',
+      requestId: pending.requestId,
+      answers: { [pending.questions[0].question]: offLabel }
+    })
+    expect(sink).not.toHaveBeenCalled()
+    expect(attachChat('w1').items.some((it) => it.text.includes('Вимкнено'))).toBe(false)
+    expect(last().stdin.write.mock.calls.length).toBe(writes)
+  })
+
+  it('inline /plan plan toggles: re-issuing the same command flips the mode', () => {
+    const sink = vi.fn()
+    onChatParams(sink)
+    ready() // default
+    sendChatMessage('w1', '/plan plan') // default → plan
+    expect(sink).toHaveBeenLastCalledWith('w1', { permissionMode: 'plan' })
+    expect(attachChat('w1').items.at(-1)?.text).toContain('Увімкнено режим планування')
+    sendChatMessage('w1', '/plan plan') // same command again → toggles back to default
+    expect(sink).toHaveBeenLastCalledWith('w1', { permissionMode: 'default' })
+    expect(attachChat('w1').items.at(-1)?.text).toContain('Вимкнено режим планування')
+    sendChatMessage('w1', '/plan plan') // → plan again
+    expect(sink).toHaveBeenLastCalledWith('w1', { permissionMode: 'plan' })
+  })
+
+  it('allows /plan mid-turn (it does not restart), unlike /model', () => {
+    const sink = vi.fn()
+    onChatParams(sink)
+    ready()
+    sendChatMessage('w1', 'hi') // turn in flight ⇒ busy
+    sendChatMessage('w1', '/plan plan')
+    expect(sink).toHaveBeenCalledWith('w1', { permissionMode: 'plan' })
+  })
+
+  it('re-asserts a persisted permission mode after the handshake (restart/restore)', () => {
+    // Simulates a relaunch: startChat is given the persisted mode, and once the
+    // session is ready we force it via set_permission_mode (so a --resume that
+    // ignores --permission-mode still lands in the right mode).
+    startChat({ ...baseOpts, permissionMode: 'plan' })
+    expect(lastArgv()).toContain('--permission-mode plan') // also passed as a flag
+    last().line({ type: 'system', subtype: 'init', session_id: 'sess-1' })
+    answerInitialize({ commands: [{ name: 'clear' }], models: MODELS })
+    expect(lastWritten()).toMatchObject({
+      type: 'control_request',
+      request: { subtype: 'set_permission_mode', mode: 'plan' }
+    })
+  })
+
+  it('does not force a mode when none was persisted (fresh workspace)', () => {
+    startChat(baseOpts) // no permissionMode
+    last().line({ type: 'system', subtype: 'init', session_id: 'sess-1' })
+    answerInitialize({ commands: [{ name: 'clear' }], models: MODELS })
+    const writes = last().stdin.write.mock.calls.map((c) => JSON.parse(c[0] as string))
+    expect(writes.some((w) => w.request?.subtype === 'set_permission_mode')).toBe(false)
+  })
+
+  it('buildCommand passes --permission-mode, reapplied on the next spawn', () => {
+    startChat({ ...baseOpts, permissionMode: 'plan' })
+    expect(lastArgv()).toContain('--permission-mode plan')
+  })
+
+  /** Emit a permission request for the given tool. */
+  const askPermission = (toolName: string, reqId = 'perm-1'): void => {
+    last().line({
+      type: 'control_request',
+      request_id: reqId,
+      request: { subtype: 'can_use_tool', tool_name: toolName, display_name: 'Exit plan mode', input: {} }
+    })
+  }
+
+  it('approving ExitPlanMode resets the tracked mode back to default', () => {
+    const sink = vi.fn()
+    onChatParams(sink)
+    ready()
+    sendChatMessage('w1', '/plan plan') // now in plan mode
+    expect(sink).toHaveBeenLastCalledWith('w1', { permissionMode: 'plan' })
+    askPermission('ExitPlanMode')
+    answerChat('w1', { kind: 'permission', requestId: 'perm-1', allow: true })
+    // Persisted back to default, and a control request was sent to align the CLI.
+    expect(sink).toHaveBeenLastCalledWith('w1', { permissionMode: 'default' })
+    expect(lastWritten()).toMatchObject({
+      type: 'control_request',
+      request: { subtype: 'set_permission_mode', mode: 'default' }
+    })
+    // /plan picker would now mark Default as current (no stale "plan").
+    expect(attachChat('w1').items.some((it) => it.text.includes('Вихід із режиму планування'))).toBe(true)
+  })
+
+  it('does not touch the mode when ExitPlanMode is denied', () => {
+    const sink = vi.fn()
+    onChatParams(sink)
+    ready()
+    sendChatMessage('w1', '/plan plan')
+    sink.mockClear()
+    askPermission('ExitPlanMode')
+    answerChat('w1', { kind: 'permission', requestId: 'perm-1', allow: false })
+    expect(sink).not.toHaveBeenCalled()
+  })
+
+  it('ignores ExitPlanMode sync when not in plan mode (no spurious reset)', () => {
+    const sink = vi.fn()
+    onChatParams(sink)
+    ready() // default mode
+    askPermission('ExitPlanMode')
+    answerChat('w1', { kind: 'permission', requestId: 'perm-1', allow: true })
+    expect(sink).not.toHaveBeenCalled()
   })
 })
 

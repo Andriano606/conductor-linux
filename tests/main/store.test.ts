@@ -24,6 +24,7 @@ import {
   removeWorkspace,
   setSettings,
   updateProject,
+  updateWorkspaceClaudeParams,
   updateWorkspaceSessionId,
   updateWorkspaceStatus
 } from '../../src/main/store'
@@ -240,6 +241,26 @@ describe('workspace CRUD', () => {
     updateWorkspaceSessionId('a', undefined)
     expect(getWorkspace('a')?.claudeSessionId).toBeUndefined()
     expect(() => updateWorkspaceSessionId('missing', 'x')).not.toThrow()
+  })
+
+  it('updateWorkspaceClaudeParams sets only the given keys, persists, ignores unknown', () => {
+    addWorkspace(mkWs({ id: 'a' }))
+    updateWorkspaceClaudeParams('a', { model: 'sonnet', effort: 'high', permissionMode: 'plan' })
+    expect(getWorkspace('a')).toMatchObject({
+      claudeModel: 'sonnet',
+      claudeEffort: 'high',
+      claudePermissionMode: 'plan'
+    })
+    // Persisted so the /model, /effort, /plan choices survive a relaunch.
+    expect(JSON.parse(readFileSync(dataFile(), 'utf8')).workspaces[0].claudePermissionMode).toBe('plan')
+    // A partial patch leaves the other fields untouched.
+    updateWorkspaceClaudeParams('a', { permissionMode: 'default' })
+    expect(getWorkspace('a')).toMatchObject({
+      claudeModel: 'sonnet',
+      claudeEffort: 'high',
+      claudePermissionMode: 'default'
+    })
+    expect(() => updateWorkspaceClaudeParams('missing', { model: 'x' })).not.toThrow()
   })
 })
 

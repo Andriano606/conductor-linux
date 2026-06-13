@@ -1,9 +1,15 @@
 import { app, BrowserWindow, Menu, shell } from 'electron'
 import { join } from 'path'
-import { initStore, updateWorkspaceSessionId } from './store'
+import { initStore, updateWorkspaceClaudeParams, updateWorkspaceSessionId } from './store'
 import { registerIpc } from './ipc'
 import { killAll, setMainWindow } from './ptyManager'
-import { killAllChats, onChatSessionId, setChatStorageDir, setChatWindow } from './claudeChat'
+import {
+  killAllChats,
+  onChatParams,
+  onChatSessionId,
+  setChatStorageDir,
+  setChatWindow
+} from './claudeChat'
 import { restoreSessions } from './workspaces'
 
 function createWindow(): void {
@@ -45,6 +51,7 @@ app.whenReady().then(() => {
   // Persist each workspace's Claude session id so chats resume after relaunch,
   // and the visible transcripts so the chat history survives restarts/archive.
   onChatSessionId(updateWorkspaceSessionId)
+  onChatParams(updateWorkspaceClaudeParams)
   setChatStorageDir(join(app.getPath('userData'), 'chats'))
   registerIpc()
   // Reaps orphaned processes from the previous session before restarting Claude;

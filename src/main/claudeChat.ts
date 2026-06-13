@@ -27,6 +27,22 @@ interface PendingInternal {
   pending: ChatPending
   /** Raw tool input, echoed back in the allow response. */
   rawInput: unknown
+  /**
+   * App-owned picker (e.g. /model, /effort): the answer is handled locally
+   * instead of being written back to the CLI. See answerChat / openLocalPicker.
+   */
+  local?: (answer: ChatAnswer) => void
+  /** Raw CLI tool name (vs the display name in `pending`) — used to detect ExitPlanMode. */
+  rawToolName?: string
+}
+
+/** One model the CLI offers (from the initialize response's `models`). */
+interface ModelInfo {
+  value: string
+  displayName: string
+  description?: string
+  supportsEffort?: boolean
+  supportedEffortLevels?: string[]
 }
 
 interface Entry {
@@ -45,6 +61,8 @@ interface Entry {
   opts?: StartOpts
   /** True while the current proc was started with --resume <sessionId>. */
   resuming?: boolean
+  /** True between killing the old proc and respawning it (model/effort change). */
+  restarting?: boolean
   /** Set by killChat so an intentional kill doesn't log an exit notice. */
   killed?: boolean
   /** Debounce timer for persisting the transcript to disk. */
@@ -59,6 +77,14 @@ interface Entry {
   commandSnapshot?: string[]
   /** Request id of the initialize handshake sent at spawn. */
   initRequestId?: string
+  /** Models the CLI offers (from initialize) — drives the /model, /effort pickers. */
+  models?: ModelInfo[]
+  /**
+   * Names of the local commands currently merged into `commands` (i.e. not
+   * shadowed by a CLI command of the same name). dispatchLocalCommand only
+   * handles a typed /command when its name is here — otherwise the CLI owns it.
+   */
+  localCommandNames?: Set<string>
   /**
    * Whether the current turn already produced assistant text. When it didn't
    * (slash commands like /usage answer only via the result event), the result
@@ -75,6 +101,17 @@ export interface StartOpts {
   args?: string
   /** Session id to resume (persisted on the workspace across app restarts). */
   resume?: string
+  /** Runtime overrides (local /model, /effort, /plan), passed as CLI flags. */
+  model?: string
+  effort?: string
+  permissionMode?: string
+}
+
+/** Patch persisted by the local /model, /effort, /plan commands. */
+interface ParamsPatch {
+  model?: string
+  effort?: string
+  permissionMode?: string
 }
 
 const MAX_ITEMS = 500
@@ -87,6 +124,8 @@ const entries = new Map<string, Entry>()
 let mainWC: WebContents | null = null
 /** Persists the session id (or clears it on a failed resume). */
 let sessionIdSink: (id: string, sessionId: string | undefined) => void = () => {}
+/** Persists a runtime choice (local /model, /effort, /plan commands). */
+let paramsSink: (id: string, patch: ParamsPatch) => void = () => {}
 /** Directory transcripts are persisted to; null (tests) = memory only. */
 let storageDir: string | null = null
 
@@ -96,6 +135,10 @@ export function setChatWindow(wc: WebContents): void {
 
 export function onChatSessionId(cb: (id: string, sessionId: string | undefined) => void): void {
   sessionIdSink = cb
+}
+
+export function onChatParams(cb: (id: string, patch: ParamsPatch) => void): void {
+  paramsSink = cb
 }
 
 /**
@@ -294,9 +337,284 @@ function buildCommand(opts: StartOpts): string {
     'stdio'
   ]
   if (opts.resume) fixed.push('--resume', opts.resume)
-  const quoted = fixed.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : JSON.stringify(a)))
+  // Runtime overrides last so a /model or /effort choice wins over any --model
+  // the user put in settings.claudeArgs.
+  const tail: string[] = []
+  if (opts.model) tail.push('--model', opts.model)
+  if (opts.effort) tail.push('--effort', opts.effort)
+  if (opts.permissionMode) tail.push('--permission-mode', opts.permissionMode)
+  const quote = (a: string): string => (/^[\w@%+=:,./-]+$/.test(a) ? a : JSON.stringify(a))
   const extra = opts.args?.trim()
-  return `exec ${quoted.join(' ')}${extra ? ` ${extra}` : ''}`
+  return [
+    'exec',
+    fixed.map(quote).join(' '),
+    extra ?? '',
+    tail.map(quote).join(' ')
+  ]
+    .filter(Boolean)
+    .join(' ')
+}
+
+// ---- Local (app-owned) slash commands ------------------------------------
+//
+// The headless CLI doesn't expose interactive TUI commands like /model and
+// /effort, so we implement them in-app: they show in the autocomplete (merged
+// by setCommands), and a typed `/name [value]` is intercepted here instead of
+// being sent to the CLI. To add another, push an entry below — `choices`
+// returns the selectable values (empty ⇒ the command is hidden), and `apply`
+// performs the effect. A choice value can be passed inline (`/model sonnet`)
+// or picked from the option menu that opens when no value is given.
+
+interface LocalChoice {
+  value: string
+  label: string
+  description?: string
+  /** Marks the value currently in effect, surfaced in the picker. */
+  current?: boolean
+}
+
+interface LocalCommand {
+  name: string
+  description: string
+  argumentHint: string
+  choices: (e: Entry) => LocalChoice[]
+  /** Apply a value chosen from the picker (a deliberate set). */
+  apply: (id: string, e: Entry, value: string) => void
+  /**
+   * Apply a value passed inline (`/cmd value`). Defaults to `apply`; /plan
+   * overrides it so re-issuing the same command toggles the mode.
+   */
+  applyArg?: (id: string, e: Entry, value: string) => void
+  /** True when applying restarts the session, so it is refused mid-turn. */
+  requiresIdle?: boolean
+}
+
+const DEFAULT_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
+
+function parseModels(raw: unknown): ModelInfo[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((m): m is Record<string, unknown> => !!m && typeof m === 'object')
+    .filter((m) => typeof m.value === 'string' && typeof m.displayName === 'string')
+    .map((m) => ({
+      value: m.value as string,
+      displayName: m.displayName as string,
+      description: typeof m.description === 'string' ? m.description : undefined,
+      supportsEffort: m.supportsEffort === true,
+      supportedEffortLevels: Array.isArray(m.supportedEffortLevels)
+        ? (m.supportedEffortLevels as unknown[]).filter((l): l is string => typeof l === 'string')
+        : undefined
+    }))
+}
+
+/** The model currently in effect for this session ('default' when unset). */
+function currentModel(e: Entry): ModelInfo | undefined {
+  const value = e.opts?.model ?? 'default'
+  return (e.models ?? []).find((m) => m.value === value) ?? (e.models ?? [])[0]
+}
+
+/**
+ * Effort levels the current model supports. Empty when models are unknown or
+ * the model doesn't support effort — so /effort is offered only when it applies.
+ */
+function effortLevels(e: Entry): string[] {
+  const model = currentModel(e)
+  if (!model?.supportsEffort) return []
+  return model.supportedEffortLevels?.length ? model.supportedEffortLevels : DEFAULT_EFFORT_LEVELS
+}
+
+const LOCAL_COMMANDS: LocalCommand[] = [
+  {
+    name: 'model',
+    description: 'Змінити модель для цієї сесії',
+    argumentHint: '[model]',
+    requiresIdle: true,
+    choices: (e) =>
+      (e.models ?? []).map((m) => ({
+        value: m.value,
+        label: m.displayName,
+        description: m.description,
+        current: (e.opts?.model ?? 'default') === m.value
+      })),
+    apply: (id, e, value) => applyParam(id, e, 'model', value)
+  },
+  {
+    name: 'effort',
+    description: 'Змінити рівень зусиль (thinking) для цієї сесії',
+    argumentHint: '[low|medium|high|xhigh|max]',
+    requiresIdle: true,
+    choices: (e) =>
+      effortLevels(e).map((l) => ({ value: l, label: l, current: e.opts?.effort === l })),
+    apply: (id, e, value) => applyParam(id, e, 'effort', value)
+  },
+  {
+    name: 'plan',
+    description: 'Режим планування (Claude лише планує, не змінює файли)',
+    argumentHint: '[plan|default]',
+    // No restart: the mode is switched live via a control request, so it is
+    // safe to change mid-turn too. A bare /plan opens a context-aware picker
+    // that leads with the actionable (non-current) option: "Увімкнути план мод"
+    // in default, "Вимкнути план мод" while planning.
+    choices: (e) => {
+      const inPlan = (e.opts?.permissionMode ?? 'default') === 'plan'
+      const planOpt: LocalChoice = {
+        value: 'plan',
+        label: inPlan ? '🧭 Режим планування (поточний)' : '🧭 Увімкнути план мод',
+        current: inPlan
+      }
+      const offOpt: LocalChoice = {
+        value: 'default',
+        label: inPlan ? '✅ Вимкнути план мод' : '✅ Звичайний режим (поточний)',
+        current: !inPlan
+      }
+      // Actionable option first.
+      return inPlan ? [offOpt, planOpt] : [planOpt, offOpt]
+    },
+    apply: (id, e, value) => applyPermissionMode(id, e, value),
+    // Inline `/plan plan` / `/plan default`: re-issuing the command that matches
+    // the current mode toggles to the other (so entering it twice flips back).
+    applyArg: (id, e, value) => {
+      const cur = e.opts?.permissionMode ?? 'default'
+      const target = value === cur ? (cur === 'plan' ? 'default' : 'plan') : value
+      applyPermissionMode(id, e, target)
+    }
+  }
+]
+
+/** Apply a model/effort choice: persist it and restart the session, resuming. */
+function applyParam(id: string, e: Entry, key: 'model' | 'effort', value: string): void {
+  if (!e.opts) return
+  // Picking the value already in effect is a no-op — no needless restart.
+  const cur = key === 'model' ? (e.opts.model ?? 'default') : e.opts.effort
+  if (cur === value) return
+  e.opts = { ...e.opts, [key]: value }
+  paramsSink(id, { [key]: value })
+  const label =
+    key === 'model'
+      ? ((e.models ?? []).find((m) => m.value === value)?.displayName ?? value)
+      : value
+  info(
+    id,
+    e,
+    `${key === 'model' ? 'Модель' : 'Зусилля'}: ${label}. Перезапускаю сесію — розмова збережеться.`
+  )
+  restartSession(id, e)
+}
+
+/**
+ * Switch the permission mode live via a set_permission_mode control request —
+ * no restart, so the conversation is uninterrupted. The choice is persisted and
+ * reapplied as --permission-mode on the next spawn. Shared by /plan and the
+ * ExitPlanMode auto-sync; silent so each caller logs its own message.
+ */
+function setPermissionMode(id: string, e: Entry, mode: string): void {
+  if (!e.opts) return
+  e.opts = { ...e.opts, permissionMode: mode }
+  paramsSink(id, { permissionMode: mode })
+  if (e.proc) {
+    writeLine(e, {
+      type: 'control_request',
+      request_id: randomUUID(),
+      request: { subtype: 'set_permission_mode', mode }
+    })
+  }
+}
+
+/** /plan: switch the permission mode and announce on/off in plain terms. */
+function applyPermissionMode(id: string, e: Entry, mode: string): void {
+  // Re-selecting the mode already in effect does nothing (and won't spam the
+  // transcript if the picker is answered repeatedly).
+  if ((e.opts?.permissionMode ?? 'default') === mode) return
+  setPermissionMode(id, e, mode)
+  info(
+    id,
+    e,
+    mode === 'plan'
+      ? '🧭 Увімкнено режим планування — Claude лише планує, без змін.'
+      : '✅ Вимкнено режим планування — звичайний режим.'
+  )
+}
+
+/**
+ * Restart the running session with the current opts (e.g. after a model/effort
+ * change), resuming the same conversation. The old proc's normal exit handler
+ * no-ops because e.proc is cleared first; the respawn happens once it is gone,
+ * so the resume never races a still-dying instance holding the session.
+ */
+function restartSession(id: string, e: Entry): void {
+  if (!e.opts) return
+  const opts: StartOpts = { ...e.opts, resume: e.sessionId ?? e.opts.resume }
+  const old = e.proc
+  e.proc = undefined
+  const respawn = (): void => {
+    e.restarting = false
+    spawnProc(id, e, opts)
+  }
+  if (old) {
+    // `restarting` blocks a stray ensureChat() from spawning a second proc in
+    // the gap before the old one actually exits.
+    e.restarting = true
+    old.once('exit', respawn)
+    killProcGroup(old)
+  } else {
+    respawn()
+  }
+}
+
+/**
+ * Intercept a typed `/command` that the app owns (in e.localCommandNames).
+ * Returns true when handled (so it is NOT forwarded to the CLI). With a value
+ * it applies directly; without one it opens the option picker. A CLI command of
+ * the same name is never in localCommandNames, so it falls through to the CLI.
+ */
+function dispatchLocalCommand(id: string, e: Entry, text: string): boolean {
+  const m = text.match(/^\/([\w-]+)(?:\s+([\s\S]+))?$/)
+  if (!m) return false
+  const cmd = LOCAL_COMMANDS.find((c) => c.name === m[1])
+  if (!cmd || !e.localCommandNames?.has(cmd.name)) return false
+  // Only restart-based commands need an idle session; live ones (/plan) don't.
+  if (cmd.requiresIdle && e.busy) {
+    info(id, e, 'Зачекай, доки Claude завершить поточну відповідь, перш ніж змінювати налаштування.')
+    return true
+  }
+  const choices = cmd.choices(e)
+  const arg = m[2]?.trim()
+  if (arg) {
+    const choice = choices.find((c) => c.value.toLowerCase() === arg.toLowerCase())
+    if (!choice) {
+      info(id, e, `Невідоме значення «${arg}». Доступні: ${choices.map((c) => c.value).join(', ')}`)
+      return true
+    }
+    ;(cmd.applyArg ?? cmd.apply)(id, e, choice.value)
+  } else {
+    openLocalPicker(id, e, cmd, choices)
+  }
+  return true
+}
+
+/** Open an in-app option picker for a local command (reuses the question UI). */
+function openLocalPicker(id: string, e: Entry, cmd: LocalCommand, choices: LocalChoice[]): void {
+  const question: ChatQuestion = {
+    question: cmd.description,
+    header: `/${cmd.name}`,
+    options: choices.map((c) => ({
+      label: c.label,
+      description: [c.description, c.current ? 'поточна' : null].filter(Boolean).join(' · ') || undefined
+    })),
+    multiSelect: false
+  }
+  const pending: ChatPending = { kind: 'question', requestId: randomUUID(), questions: [question] }
+  e.queue.push({
+    pending,
+    rawInput: null,
+    local: (answer) => {
+      if (answer.kind !== 'question') return
+      const label = answer.answers[question.question]
+      const choice = choices.find((c) => c.label === label)
+      if (choice) cmd.apply(id, e, choice.value)
+    }
+  })
+  emitPending(id, e)
 }
 
 /** Start the chat session for a workspace (idempotent while the proc lives). */
@@ -310,7 +628,7 @@ export function startChat(opts: StartOpts): void {
 /** Restart the session lazily (after a crash or a manual process kill). */
 export function ensureChat(id: string): void {
   const e = entries.get(id)
-  if (!e || e.proc || !e.opts) return
+  if (!e || e.proc || e.restarting || !e.opts) return
   spawnProc(id, e, { ...e.opts, resume: e.sessionId ?? e.opts.resume })
 }
 
@@ -386,6 +704,9 @@ function writeLine(e: Entry, obj: unknown): void {
 export function sendChatMessage(id: string, text: string): void {
   const e = ensure(id)
   if (!e.proc) ensureChat(id)
+  // A registered local command (/model, /effort, …) is handled in-app and not
+  // forwarded to the CLI; anything else is a normal user message.
+  if (dispatchLocalCommand(id, e, text)) return
   pushItem(id, e, { id: randomUUID(), role: 'user', text, ts: Date.now() })
   setBusy(id, e, true)
   e.turnHadText = false
@@ -395,20 +716,21 @@ export function sendChatMessage(id: string, text: string): void {
   })
 }
 
-/**
- * Dispatch a typed `/command` to its local handler when the chat owns it.
- * The text falls through to the CLI (returns false) unless a registered local
- * command matches, its capability is present, AND the CLI hasn't started
- * providing it natively (native wins — see drift detection). With an argument
- * the command applies directly; without one it opens its option picker.
- */
 /** Answer the currently pending question/permission request. */
 export function answerChat(id: string, answer: ChatAnswer): void {
   const e = entries.get(id)
   if (!e) return
   const idx = e.queue.findIndex((p) => p.pending.requestId === answer.requestId)
   if (idx === -1) return
-  const [{ pending, rawInput }] = e.queue.splice(idx, 1)
+  const [{ pending, rawInput, local, rawToolName }] = e.queue.splice(idx, 1)
+
+  // App-owned picker (/model, /effort): apply the choice locally, nothing goes
+  // back to the CLI.
+  if (local) {
+    local(answer)
+    emitPending(id, e)
+    return
+  }
 
   if (answer.kind === 'question' && pending.kind === 'question') {
     const input = (rawInput ?? {}) as { questions?: ChatQuestion[] }
@@ -427,6 +749,13 @@ export function answerChat(id: string, answer: ChatAnswer): void {
     if (answer.allow) {
       respond(e, answer.requestId, { behavior: 'allow', updatedInput: rawInput })
       info(id, e, `Дозволено: ${pending.toolName}`)
+      // Approving the plan exits plan mode on the CLI side — keep our tracked
+      // mode (picker "current" + the persisted respawn flag) in sync so we
+      // don't re-enter plan on the next restart.
+      if (rawToolName === 'ExitPlanMode' && (e.opts?.permissionMode ?? 'default') !== 'default') {
+        setPermissionMode(id, e, 'default')
+        info(id, e, 'Вихід із режиму планування — повернувся звичайний режим.')
+      }
     } else {
       respond(e, answer.requestId, {
         behavior: 'deny',
@@ -556,14 +885,17 @@ function handleLine(id: string, e: Entry, line: string): void {
         e.resuming = false
         e.sessionId = msg.session_id
         sessionIdSink(id, msg.session_id)
+        // Capture models here too so the local /model, /effort pickers work even
+        // on a CLI old enough to lack the initialize handshake.
+        if (!e.models && Array.isArray(msg.models)) e.models = parseModels(msg.models)
         // Bare fallback for the command list — initialize (with descriptions)
         // normally beats this; don't let names-only overwrite it.
         if (!e.commands && Array.isArray(msg.slash_commands)) {
           const names = (msg.slash_commands as unknown[]).filter(
             (c): c is string => typeof c === 'string'
           )
-          e.commands = [...new Set(names)].map((name) => ({ name }))
-          emit(id, e, { type: 'commands', commands: e.commands })
+          const cli = [...new Set(names)].map((name) => ({ name }))
+          setCommands(id, e, cli)
         }
       } else if (msg.subtype === 'status') {
         // Slash-command feedback (e.g. /compact): surface failures so the
@@ -638,11 +970,13 @@ function handleLine(id: string, e: Entry, line: string): void {
 }
 
 /**
- * The initialize handshake response: the command list, with descriptions and
- * argument hints. Only the CLI's own commands are shown — nothing is added or
- * emulated locally. detectCommandDrift then reports anything that changed.
+ * The initialize handshake response: the CLI's command list (with descriptions
+ * and argument hints) plus the available models. The CLI's own commands are
+ * shown as-is; local commands (/model, /effort) are merged in by setCommands.
+ * detectCommandDrift then reports anything that changed.
  */
 function handleInitialize(id: string, e: Entry, r: Record<string, unknown>): void {
+  if (Array.isArray(r.models)) e.models = parseModels(r.models)
   const parsed: ChatCommand[] = Array.isArray(r.commands)
     ? (r.commands as Record<string, unknown>[])
         .filter((c) => typeof c.name === 'string' && c.name)
@@ -664,10 +998,50 @@ function handleInitialize(id: string, e: Entry, r: Record<string, unknown>): voi
     return true
   })
   detectCommandDrift(id, e, cliCommands)
-  if (cliCommands.length) {
-    e.commands = cliCommands
-    emit(id, e, { type: 'commands', commands: cliCommands })
+  if (cliCommands.length) setCommands(id, e, cliCommands)
+  // Enforce the persisted permission mode now that the session is ready — a
+  // --resume doesn't always honor the --permission-mode flag, so re-assert it
+  // here to guarantee the CLI matches our tracked state across restart/restore.
+  enforcePermissionMode(e)
+}
+
+/**
+ * Re-assert the session's permission mode via a control request. Called after
+ * the handshake on every (re)start so a persisted /plan choice survives app
+ * restarts and archive/restore even if --permission-mode is ignored on resume.
+ */
+function enforcePermissionMode(e: Entry): void {
+  const mode = e.opts?.permissionMode
+  if (e.proc && mode) {
+    writeLine(e, {
+      type: 'control_request',
+      request_id: randomUUID(),
+      request: { subtype: 'set_permission_mode', mode }
+    })
   }
+}
+
+/**
+ * Publish the command list shown in the input autocomplete: the CLI's own
+ * commands plus every local command whose name the CLI does NOT already provide
+ * (native wins) and that currently has choices to offer. The set of locally
+ * owned names is remembered so dispatchLocalCommand only intercepts those.
+ */
+function setCommands(id: string, e: Entry, cliCommands: ChatCommand[]): void {
+  const cliNames = new Set(cliCommands.map((c) => c.name))
+  const locals = LOCAL_COMMANDS.filter(
+    (lc) => !cliNames.has(lc.name) && lc.choices(e).length > 0
+  )
+  e.localCommandNames = new Set(locals.map((lc) => lc.name))
+  e.commands = [
+    ...cliCommands,
+    ...locals.map((lc) => ({
+      name: lc.name,
+      description: lc.description,
+      argumentHint: lc.argumentHint
+    }))
+  ]
+  emit(id, e, { type: 'commands', commands: e.commands })
 }
 
 /**
@@ -793,7 +1167,7 @@ function handleControlRequest(id: string, e: Entry, msg: Record<string, unknown>
       summary: summarizeToolUse(req.tool_name ?? '', req.input)
     }
   }
-  e.queue.push({ pending, rawInput: req.input })
+  e.queue.push({ pending, rawInput: req.input, rawToolName: req.tool_name })
   if (e.queue.length === 1) emitPending(id, e)
 }
 
