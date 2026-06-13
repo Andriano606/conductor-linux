@@ -1,6 +1,7 @@
 import { vi } from 'vitest'
-import type { Project, Settings, Workspace } from '../../src/shared/types'
+import type { ChatSnapshot, Project, Settings, Workspace } from '../../src/shared/types'
 import { useStore } from '../../src/renderer/src/store'
+import { useChatStore } from '../../src/renderer/src/chatStore'
 
 export const settings: Settings = {
   worktreesDir: '/wt',
@@ -66,6 +67,19 @@ export function makeApi() {
     onTaskRunning: vi.fn(() => () => {}),
     onClaudeBusy: vi.fn(() => () => {}),
     onWorkspacesChanged: vi.fn(() => () => {}),
+    attachChat: vi.fn(
+      async (): Promise<ChatSnapshot> => ({
+        items: [],
+        pending: null,
+        busy: false,
+        seq: 0,
+        commands: []
+      })
+    ),
+    sendChat: vi.fn(),
+    answerChat: vi.fn(),
+    interruptChat: vi.fn(),
+    onChatEvent: vi.fn(() => () => {}),
     attachPty: vi.fn(async () => ''),
     sendInput: vi.fn(),
     resizePty: vi.fn(),
@@ -98,10 +112,11 @@ export function resetStore(): void {
   })
 }
 
-/** Install a fresh stubbed window.api and reset the store. Returns the api. */
+/** Install a fresh stubbed window.api and reset the stores. Returns the api. */
 export function setupRenderer(): Api {
   const api = makeApi()
   ;(window as unknown as { api: Api }).api = api
   resetStore()
+  useChatStore.setState({ byId: {} })
   return api
 }

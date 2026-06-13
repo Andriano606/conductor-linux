@@ -60,13 +60,18 @@ Two gotchas, both handled below:
 # Build the match pattern from pieces so this script's own argv can't match it.
 pat=$(printf '%s' '.mount_' 'Conduc')
 
-# Kill the running instance (main + helper procs) by pgrep-collected pids.
-pids=$(pgrep -f "$pat" | tr '\n' ' ')
-[ -n "$pids" ] && kill -9 $pids 2>/dev/null
+# Kill the running instance (main + helper procs). xargs -r, NOT `kill $pids`:
+# the tool shell is zsh, which does not word-split an unquoted variable, so
+# `kill -9 $pids` would pass "pid1 pid2" as one bogus argument and kill nothing.
+pgrep -f "$pat" | xargs -r kill -9
 sleep 2
 # Re-kill any orphaned gpu/network helpers left over from the old mount.
-left=$(pgrep -f "$pat" | tr '\n' ' ')
-[ -n "$left" ] && kill -9 $left 2>/dev/null
+pgrep -f "$pat" | xargs -r kill -9
+
+# A stale SingletonLock makes the relaunch attach to a dead instance (старий
+# білд). Explicit paths, NO globs — a non-matching glob ("Singleton*") makes
+# zsh abort the whole script with "no matches found" before the relaunch runs.
+rm -f "$HOME/.config/Conductor Linux/SingletonLock" "$HOME/.config/conductor-linux/SingletonLock"
 
 # Relaunch the freshly packaged AppImage the way the desktop icon does,
 # fully detached so it outlives this shell.
@@ -76,7 +81,9 @@ setsid "$APPIMAGE" --no-sandbox >/dev/null 2>&1 < /dev/null &
 disown 2>/dev/null || true
 sleep 6
 ```
-Run that block with `dangerouslyDisableSandbox: true`.
+Run that block with `dangerouslyDisableSandbox: true`. Then ALWAYS verify (step
+4) — if the pids/mount suffix did not change, the kill silently failed and the
+icon/app is still the old build.
 
 ### 4. Verify the new instance is up
 ```bash

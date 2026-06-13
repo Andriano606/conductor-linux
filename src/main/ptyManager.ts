@@ -9,44 +9,9 @@ interface Entry {
   proc?: pty.IPty
   /** Current task proc is a tracked "run" (drives the Run/Stop button). */
   tracked?: boolean
-  /** Claude only: true while Claude's TUI shows its "working" status line. */
-  busy?: boolean
-  /** Debounce timer that flips `busy` back off after the marker stops refreshing. */
-  busyTimer?: ReturnType<typeof setTimeout>
-  /** Claude only: last few stripped chars, to catch a marker split across chunks. */
-  claudeCarry?: string
 }
 
 const MAX_BUFFER = 500_000
-// Detecting whether Claude is "working" off raw output alone is wrong — the TUI
-// also redraws on startup, cursor blink and idle prompt. We use two signals from
-// the status line, which only appears while Claude is actively running:
-//
-//  1. The hint "esc to interrupt" — shown the moment Claude starts working. We
-//     use it to TURN the indicator ON. It never appears in the startup banner or
-//     idle prompt, so opening a window can't trigger a false spin. Its word gaps
-//     are cursor-move escapes ("esc\x1b[7Gto\x1b[10G…"), not spaces, so after
-//     ANSI-stripping the words collapse ("esctointerrupt"); match loosely across
-//     any non-letter separators to hit both that and a literal-spaces form.
-//  2. The animated spinner glyph (star frames ✶✻✽… and braille dots) — refreshes
-//     several times a second the WHOLE time Claude works, including while a tool
-//     or shell command blocks, when the "esc to interrupt" line stops repainting
-//     for a few seconds. We use it only to KEEP the indicator alive once on, so a
-//     lone spinner glyph (e.g. the "✻ Welcome" banner) can't turn it on by itself.
-const CLAUDE_WORKING_MARKER = /esc[^a-z]*to[^a-z]*interrupt/i
-// Star dingbats (U+2720–274F, incl. ✶✷✸✻✽) and braille (U+2800–28FF) cover both
-// spinner styles; neither occurs in normal code/prose, so keep-alive is safe.
-const CLAUDE_SPINNER = /[✠-❏⠀-⣿]/
-// Once neither signal refreshes for this long, treat Claude as idle. Must be
-// comfortably longer than the spinner refresh interval (sub-second).
-const CLAUDE_IDLE_MS = 2000
-// Carry length: shorter than the collapsed marker ("esctointerrupt") so a stale
-// marker can't fully linger in the carry (which would wedge busy on), while a
-// marker split across two PTY reads is still rejoined and caught.
-const CLAUDE_CARRY = 'esctointerrupt'.length - 1
-// Strips ANSI escape sequences so the marker matches even when colorized.
-// eslint-disable-next-line no-control-regex
-const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-Z\\-_]/g
 const entries = new Map<string, Entry>()
 let mainWC: WebContents | null = null
 
@@ -90,13 +55,6 @@ function send(channel: string, payload: unknown): void {
   if (mainWC && !mainWC.isDestroyed()) mainWC.send(channel, payload)
 }
 
-/** Flip Claude's "working" state and notify the renderer only on a change. */
-function setClaudeBusy(id: string, e: Entry, busy: boolean): void {
-  if (e.busy === busy) return
-  e.busy = busy
-  send('claude:busy', { id, busy })
-}
-
 function wire(id: string, kind: PtyKind, e: Entry, proc: pty.IPty): void {
   proc.onData((d) => {
     e.buffer += d
@@ -104,33 +62,12 @@ function wire(id: string, kind: PtyKind, e: Entry, proc: pty.IPty): void {
     if (e.streaming && mainWC && !mainWC.isDestroyed()) {
       mainWC.send('pty:data', { id, kind, data: d })
     }
-    // Claude is "working" only while its TUI status line is live. The interrupt
-    // marker turns it ON (never present in the banner/idle prompt); the spinner
-    // glyph keeps it alive while a blocking tool stops the marker repainting.
-    // Raw output alone (startup redraw, cursor blink, idle prompt) does not count.
-    if (kind === 'claude') {
-      const stripped = d.replace(ANSI, '')
-      const hay = (e.claudeCarry ?? '') + stripped
-      e.claudeCarry = hay.slice(-CLAUDE_CARRY)
-      // Prepend a short carry so a marker split across two reads is still caught.
-      const startsWork = CLAUDE_WORKING_MARKER.test(hay)
-      const sustainsWork = e.busy === true && CLAUDE_SPINNER.test(stripped)
-      if (startsWork || sustainsWork) {
-        setClaudeBusy(id, e, true)
-        if (e.busyTimer) clearTimeout(e.busyTimer)
-        e.busyTimer = setTimeout(() => setClaudeBusy(id, e, false), CLAUDE_IDLE_MS)
-      }
-    }
   })
   proc.onExit(({ exitCode }) => {
     // A newer proc may have replaced this one (e.g. run restarted); only the
     // current proc should clear state and emit lifecycle events.
     const superseded = e.proc !== proc
     if (!superseded) e.proc = undefined
-    if (kind === 'claude' && !superseded) {
-      if (e.busyTimer) clearTimeout(e.busyTimer)
-      setClaudeBusy(id, e, false)
-    }
     if (mainWC && !mainWC.isDestroyed()) {
       mainWC.send('pty:exit', { id, kind, exitCode })
       if (kind === 'task' && !superseded && e.tracked) {
@@ -139,29 +76,6 @@ function wire(id: string, kind: PtyKind, e: Entry, proc: pty.IPty): void {
       }
     }
   })
-}
-
-/** Start the interactive Claude session for a workspace (idempotent). */
-export function startClaude(opts: {
-  id: string
-  cwd: string
-  env: NodeJS.ProcessEnv
-  cols: number
-  rows: number
-  args?: string
-}): void {
-  const e = ensure(opts.id, 'claude')
-  if (e.proc) return
-  const args = opts.args?.trim()
-  const proc = pty.spawn('/bin/bash', ['-lc', args ? `exec claude ${args}` : 'exec claude'], {
-    name: 'xterm-256color',
-    cwd: opts.cwd,
-    env: opts.env,
-    cols: opts.cols || 80,
-    rows: opts.rows || 24
-  })
-  e.proc = proc
-  wire(opts.id, 'claude', e, proc)
 }
 
 /** Start a free interactive shell in the workspace directory (idempotent). */
@@ -262,7 +176,9 @@ export function attach(id: string, kind: PtyKind): string {
 }
 
 export function killWorkspace(id: string): void {
-  for (const kind of ['claude', 'task', 'shell'] as PtyKind[]) {
+  // 'claude' is no longer a PTY — the structured chat session is killed
+  // separately via claudeChat.killChat.
+  for (const kind of ['task', 'shell'] as PtyKind[]) {
     const k = key(id, kind)
     const e = entries.get(k)
     if (e?.proc) killProc(e.proc)

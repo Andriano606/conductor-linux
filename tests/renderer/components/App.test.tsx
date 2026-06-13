@@ -30,13 +30,16 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByText(/Додай проект/)).toBeInTheDocument())
   })
 
-  it('renders the toolbar and terminal host for the active workspace', async () => {
+  it('renders the toolbar and the Claude chat for the active workspace', async () => {
     api.getSettings.mockResolvedValue(settings)
     api.listWorkspaces.mockResolvedValue([mkWs({ id: 'a', name: 'alpha' })])
     const { container } = render(<App />)
     // The toolbar's Run button only renders once a workspace is active.
     await waitFor(() => expect(screen.getByText('▶ Run')).toBeInTheDocument())
-    expect(container.querySelector('.term-host')).toBeInTheDocument()
+    // The default tab is the structured Claude chat, not an xterm host.
+    expect(container.querySelector('.chat')).toBeInTheDocument()
+    expect(container.querySelector('.term-host')).not.toBeInTheDocument()
+    await waitFor(() => expect(api.attachChat).toHaveBeenCalledWith('a'))
   })
 
   it('disposes terminals and reassigns active when a workspace is archived', async () => {

@@ -24,6 +24,7 @@ import {
   removeWorkspace,
   setSettings,
   updateProject,
+  updateWorkspaceSessionId,
   updateWorkspaceStatus
 } from '../../src/main/store'
 
@@ -227,6 +228,18 @@ describe('workspace CRUD', () => {
     updateWorkspaceStatus('a', 'active')
     expect(getWorkspace('a')?.status).toBe('active')
     expect(() => updateWorkspaceStatus('missing', 'archived')).not.toThrow()
+  })
+
+  it('updateWorkspaceSessionId sets, clears, persists and ignores unknown/no-op', () => {
+    addWorkspace(mkWs({ id: 'a' }))
+    updateWorkspaceSessionId('a', 'sess-1')
+    expect(getWorkspace('a')?.claudeSessionId).toBe('sess-1')
+    // Persisted to disk so the chat resumes after a restart.
+    expect(JSON.parse(readFileSync(dataFile(), 'utf8')).workspaces[0].claudeSessionId).toBe('sess-1')
+    // Clearing it (e.g. a failed resume) is allowed.
+    updateWorkspaceSessionId('a', undefined)
+    expect(getWorkspace('a')?.claudeSessionId).toBeUndefined()
+    expect(() => updateWorkspaceSessionId('missing', 'x')).not.toThrow()
   })
 })
 

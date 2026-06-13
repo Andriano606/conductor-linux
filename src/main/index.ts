@@ -1,8 +1,9 @@
 import { app, BrowserWindow, Menu, shell } from 'electron'
 import { join } from 'path'
-import { initStore } from './store'
+import { initStore, updateWorkspaceSessionId } from './store'
 import { registerIpc } from './ipc'
 import { killAll, setMainWindow } from './ptyManager'
+import { killAllChats, onChatSessionId, setChatStorageDir, setChatWindow } from './claudeChat'
 import { restoreSessions } from './workspaces'
 
 function createWindow(): void {
@@ -23,6 +24,7 @@ function createWindow(): void {
   })
 
   setMainWindow(win.webContents)
+  setChatWindow(win.webContents)
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
@@ -40,6 +42,10 @@ app.whenReady().then(() => {
   // Remove the native menu bar entirely so it never flickers in (Alt-toggle etc.)
   Menu.setApplicationMenu(null)
   initStore()
+  // Persist each workspace's Claude session id so chats resume after relaunch,
+  // and the visible transcripts so the chat history survives restarts/archive.
+  onChatSessionId(updateWorkspaceSessionId)
+  setChatStorageDir(join(app.getPath('userData'), 'chats'))
   registerIpc()
   // Reaps orphaned processes from the previous session before restarting Claude;
   // fire-and-forget so window creation isn't blocked by the SIGTERM grace period.
@@ -53,9 +59,11 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   killAll()
+  killAllChats()
   if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('before-quit', () => {
   killAll()
+  killAllChats()
 })

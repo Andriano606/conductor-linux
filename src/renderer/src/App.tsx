@@ -9,7 +9,9 @@ import { ProjectSettingsModal } from './components/ProjectSettingsModal'
 import { NewWorkspaceModal } from './components/NewWorkspaceModal'
 import { ArchivedModal } from './components/ArchivedModal'
 import { ConfirmModal } from './components/ConfirmModal'
+import { ChatView } from './components/ChatView'
 import { disposeWorkspace, writeData } from './termRegistry'
+import { useChatStore } from './chatStore'
 
 export function App(): JSX.Element {
   const {
@@ -32,6 +34,7 @@ export function App(): JSX.Element {
     void load()
 
     const offData = window.api.onPtyData(({ id, kind, data }) => writeData(id, kind, data))
+    const offChat = window.api.onChatEvent((p) => useChatStore.getState().applyEvent(p))
     const offRunning = window.api.onTaskRunning(({ id, running }) => setRunning(id, running))
     const offBusy = window.api.onClaudeBusy(({ id, busy }) => setClaudeBusy(id, busy))
     const offProjects = window.api.onProjectsChanged((next) => setProjects(next))
@@ -42,7 +45,10 @@ export function App(): JSX.Element {
       // just archived — their PTYs are killed in main either way.
       const liveNextIds = new Set(next.filter((w) => w.status !== 'archived').map((w) => w.id))
       for (const w of prev) {
-        if (w.status !== 'archived' && !liveNextIds.has(w.id)) disposeWorkspace(w.id)
+        if (w.status !== 'archived' && !liveNextIds.has(w.id)) {
+          disposeWorkspace(w.id)
+          useChatStore.getState().dispose(w.id)
+        }
       }
       // Note: we intentionally do NOT switch tabs when setup finishes — the user
       // stays on whatever tab they're currently viewing.
@@ -57,6 +63,7 @@ export function App(): JSX.Element {
 
     return () => {
       offData()
+      offChat()
       offRunning()
       offBusy()
       offProjects()
@@ -74,7 +81,11 @@ export function App(): JSX.Element {
         {active ? (
           <>
             <Toolbar ws={active} />
-            <TerminalView id={active.id} kind={activeKind} />
+            {activeKind === 'claude' ? (
+              <ChatView id={active.id} />
+            ) : (
+              <TerminalView id={active.id} kind={activeKind} />
+            )}
           </>
         ) : (
           <div className="placeholder">

@@ -1,7 +1,7 @@
 import { spawn } from 'child_process'
 import { BrowserWindow, Menu, clipboard, dialog, ipcMain, shell } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
-import type { Project, ProjectScripts, PtyKind, Settings } from '../shared/types'
+import type { ChatAnswer, Project, ProjectScripts, PtyKind, Settings } from '../shared/types'
 import {
   getProject,
   getProjects,
@@ -20,6 +20,7 @@ import {
   createWorkspace,
   deleteArchivedWorkspace,
   deleteProject,
+  ensureClaudeChat,
   ensureShell,
   finishArchive,
   finishSetup,
@@ -28,6 +29,7 @@ import {
   restoreWorktree,
   runWorkspace
 } from './workspaces'
+import { answerChat, attachChat, interruptChat, sendChatMessage } from './claudeChat'
 
 function notifyWorkspacesChanged(): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -155,6 +157,19 @@ export function registerIpc(): void {
     await deleteArchivedWorkspace(id)
     notifyWorkspacesChanged()
   })
+
+  // ---- Claude chat ----
+  ipcMain.handle('chat:attach', (_e, id: string) => {
+    // Restart a crashed/killed session lazily the moment its tab is shown.
+    ensureClaudeChat(id)
+    return attachChat(id)
+  })
+  ipcMain.on('chat:send', (_e, id: string, text: string) => {
+    ensureClaudeChat(id)
+    sendChatMessage(id, text)
+  })
+  ipcMain.on('chat:answer', (_e, id: string, answer: ChatAnswer) => answerChat(id, answer))
+  ipcMain.on('chat:interrupt', (_e, id: string) => interruptChat(id))
 
   // ---- PTY ----
   ipcMain.handle('pty:attach', (_e, id: string, kind: PtyKind) => {

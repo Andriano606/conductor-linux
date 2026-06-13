@@ -1,5 +1,8 @@
 import { clipboard, contextBridge, ipcRenderer } from 'electron'
 import type {
+  ChatAnswer,
+  ChatEventPayload,
+  ChatSnapshot,
   Project,
   ProjectScripts,
   PtyData,
@@ -72,6 +75,17 @@ const api = {
     const listener = (_e: unknown, workspaces: Workspace[]): void => cb(workspaces)
     ipcRenderer.on('workspaces:changed', listener)
     return () => ipcRenderer.removeListener('workspaces:changed', listener)
+  },
+
+  // Claude chat
+  attachChat: (id: string): Promise<ChatSnapshot> => ipcRenderer.invoke('chat:attach', id),
+  sendChat: (id: string, text: string): void => ipcRenderer.send('chat:send', id, text),
+  answerChat: (id: string, answer: ChatAnswer): void => ipcRenderer.send('chat:answer', id, answer),
+  interruptChat: (id: string): void => ipcRenderer.send('chat:interrupt', id),
+  onChatEvent: (cb: (payload: ChatEventPayload) => void): (() => void) => {
+    const listener = (_e: unknown, payload: ChatEventPayload): void => cb(payload)
+    ipcRenderer.on('chat:event', listener)
+    return () => ipcRenderer.removeListener('chat:event', listener)
   },
 
   // PTY

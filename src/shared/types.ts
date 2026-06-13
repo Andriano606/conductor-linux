@@ -75,14 +75,104 @@ export interface Workspace {
   status: WorkspaceStatus
   /** Persisted setup-script outcome, surfaced as a sidebar indicator. */
   setupStatus?: SetupStatus
+  /**
+   * Claude session id reported by the chat session's init event, persisted so
+   * the conversation is resumed (--resume) after an app restart.
+   */
+  claudeSessionId?: string
 }
 
 /**
- * A PTY belongs to a workspace: 'claude' is the interactive Claude session,
- * 'task' aggregates script output (read-only), 'shell' is a free interactive
- * shell in the workspace directory for running ad-hoc commands.
+ * A terminal tab of a workspace: 'claude' is the structured Claude chat (not a
+ * PTY — a stream-json session rendered by our own UI), 'task' aggregates script
+ * output (read-only), 'shell' is a free interactive shell in the workspace
+ * directory for running ad-hoc commands.
  */
 export type PtyKind = 'claude' | 'task' | 'shell'
+
+// ---- Claude chat (structured stream-json session) ------------------------
+
+/** One selectable option of an AskUserQuestion question. */
+export interface ChatQuestionOption {
+  label: string
+  description?: string
+}
+
+/** One question Claude asked via the AskUserQuestion tool. */
+export interface ChatQuestion {
+  question: string
+  header?: string
+  options: ChatQuestionOption[]
+  multiSelect?: boolean
+}
+
+/**
+ * A request from Claude that blocks the conversation until the user responds
+ * from the chat input area: either a clarifying question with options (shown
+ * as buttons) or a tool-permission request (Allow/Deny).
+ */
+export type ChatPending =
+  | { kind: 'question'; requestId: string; questions: ChatQuestion[] }
+  | { kind: 'permission'; requestId: string; toolName: string; summary: string }
+
+/** One entry of the chat transcript. */
+export interface ChatItem {
+  id: string
+  role: 'user' | 'assistant' | 'tool' | 'info'
+  text: string
+  /**
+   * User items only: this entry records the answer to an options question,
+   * not a typed message — excluded from the input's arrow-key history.
+   */
+  answer?: boolean
+  /** Tool items only: the tool name (e.g. "Bash"). */
+  toolName?: string
+  /** Tool items only: flips true when its tool_result arrives. */
+  done?: boolean
+  /** Tool items only: the tool_result reported an error. */
+  isError?: boolean
+  ts: number
+}
+
+/** One slash command available in the session (reported by the CLI). */
+export interface ChatCommand {
+  name: string
+  description?: string
+  argumentHint?: string
+}
+
+/** Snapshot returned by chat:attach — the transcript plus live state. */
+export interface ChatSnapshot {
+  items: ChatItem[]
+  pending: ChatPending | null
+  busy: boolean
+  /** Sequence number of the last event folded into this snapshot. */
+  seq: number
+  /** Slash commands the CLI reported (for the input's autocomplete). */
+  commands?: ChatCommand[]
+}
+
+/** Incremental chat event streamed to the renderer over chat:event. */
+export type ChatEvent =
+  | { type: 'item'; item: ChatItem }
+  | { type: 'append'; itemId: string; text: string }
+  | { type: 'update'; item: ChatItem }
+  | { type: 'pending'; pending: ChatPending | null }
+  | { type: 'busy'; busy: boolean }
+  | { type: 'commands'; commands: ChatCommand[] }
+  /** The CLI reset the conversation (e.g. /clear) — drop the transcript. */
+  | { type: 'clear' }
+
+export interface ChatEventPayload {
+  id: string
+  seq: number
+  ev: ChatEvent
+}
+
+/** The user's response to a ChatPending, sent from the renderer to main. */
+export type ChatAnswer =
+  | { kind: 'question'; requestId: string; answers: Record<string, string> }
+  | { kind: 'permission'; requestId: string; allow: boolean; message?: string }
 
 export interface PtyData {
   id: string

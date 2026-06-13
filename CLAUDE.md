@@ -32,14 +32,26 @@ Three Electron processes, each a separate electron-vite build target (see `elect
 - **preload** (`src/preload/index.ts`) — exposes a single typed `window.api` object over `contextBridge` (contextIsolation on, nodeIntegration off). Every renderer→main call goes through here. The `Api` type is derived from this object and consumed by the renderer.
 - **renderer** (`src/renderer/src/`) — React + `zustand` store. No direct Node access; everything via `window.api`.
 
-### The two-layer terminal model (the core trick)
+### The Claude tab: a structured chat, not a terminal
 
-Terminals exist as a buffer in main **and** a live xterm instance in renderer, both keyed by `${workspaceId}:${kind}` where `kind` is one of `claude | task | shell`:
+The `claude` tab does **not** run the Claude TUI in a PTY. `src/main/claudeChat.ts` spawns `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-prompt-tool stdio` (plus `settings.claudeArgs`) per workspace and speaks NDJSON over stdio:
+
+- Output events (`stream_event` text deltas, `assistant` messages, `user` tool results, `result`) become a structured transcript (`ChatItem[]`, capped at 500) that `ChatView.tsx` renders with its own input box. Busy = between sending a user message and the `result` event (emitted on the same `claude:busy` channel the old marker hack used).
+- `--permission-prompt-tool stdio` makes the CLI send `control_request`/`can_use_tool` for tool permissions **and** the AskUserQuestion tool — even under `--dangerously-skip-permissions` (questions still come through). These become `ChatPending` entries: AskUserQuestion options render as buttons in the input area (the text field doubles as the free-form "свій варіант"; answers go back as `updatedInput.answers` keyed by question text), permissions render as Дозволити/Відхилити (deny message = typed text).
+- The renderer mirror (`chatStore.ts`) syncs via a snapshot (`chat:attach`) + sequenced `chat:event` increments; a seq gap triggers a re-attach, events racing an attach are buffered.
+- The init event's `session_id` is persisted on the workspace (`claudeSessionId`) and used as `--resume` after app restarts/lazy restarts (a resume that dies before init falls back to a fresh session once, with a visible info notice).
+- The visible transcript is persisted too: debounced saves to `userData/chats/<workspaceId>.json` (flushed on turn end/exit/kill), reloaded on first touch. Archive keeps the file (restore shows the old history and resumes the conversation); only permanent workspace/project deletion removes it via `deleteChatHistory`.
+- Slash commands: at spawn the chat sends an `initialize` control request; the response provides the command list **with descriptions/argument hints**, which feeds the autocomplete immediately (the bare `slash_commands` from the init event is only a fallback). The menu shows **exactly the CLI's own commands — nothing is emulated locally**; `/model`, `/effort`, and other TUI-only commands the headless CLI doesn't register simply aren't offered. Every typed `/command` goes to the CLI as a plain user message and it executes them; output that arrives only in the `result` event (`/usage`, `/context`) is rendered as the assistant reply via the `turnHadText` fallback, and a TUI-only command the CLI rejects (`"… isn't available in this environment."`, matched by `UNAVAILABLE_RE`) is shown as a plain "недоступна" notice rather than echoed as a reply.
+- `detectCommandDrift` persists the presented command names in the chat file and, on the next `initialize`, reports commands added/removed by a CLI upgrade — so the command set never changes silently. An init event whose `session_id` differs from the current one means the CLI reset the conversation (`/clear`) — the transcript is dropped to match. The autocomplete menu (in `ChatView`) sorts commands alphabetically like the TUI.
+
+### The two-layer terminal model (task/shell tabs)
+
+Real terminals exist as a buffer in main **and** a live xterm instance in renderer, both keyed by `${workspaceId}:${kind}` where `kind` is `task | shell`:
 
 - `src/main/ptyManager.ts` — spawns `node-pty` procs, accumulates output into a per-key ring buffer (capped at `MAX_BUFFER`), and only forwards live data to the renderer when a terminal is `streaming` (flipped on `attach`). `attach()` returns the buffer snapshot atomically, then streaming begins — this is how scrollback survives even when no UI is mounted.
 - `src/renderer/src/termRegistry.ts` — keeps one long-lived `xterm` instance per key so scrollback survives tab/workspace switches; the wrapper DOM element is *moved* into the visible host on activation rather than recreated. Only `TerminalView.tsx` mounts/fits it.
 
-The three kinds: `claude` (interactive `claude` session), `shell` (free interactive shell, started lazily on first Terminal-tab open), `task` (read-only — aggregates setup/run/archive script output; the "Скрипти" tab). The `task` terminal is `disableStdin` in xterm so the user can't Ctrl+C the running app.
+`shell` is a free interactive shell (started lazily on first Terminal-tab open); `task` is read-only — it aggregates setup/run/archive script output (the "Скрипти" tab) and is `disableStdin` in xterm so the user can't Ctrl+C the running app.
 
 **Process-group kill** (`killProc` in ptyManager): procs are killed via `process.kill(-pid, ...)` (negative pid = whole group) because node-pty's own `.kill()` only signals the shell, leaving a dev server (and its bound port) alive. This is why Run/Stop and archive actually free ports.
 
@@ -50,7 +62,7 @@ The three kinds: `claude` (interactive `claude` session), `shell` (free interact
 - **Create**: `createWorkspace(projectId, name, baseBranch?)` adds the worktree+branch synchronously under the workspace's **project** (see Projects below) and returns immediately with `setting_up`; `finishSetup` then runs the project's setup script and starts `claude` **in the background** so the UI never blocks. IPC handlers in `ipc.ts` follow this pattern (`void finishSetup(...)`, `notifyWorkspacesChanged()`).
 - **Archive**: `beginArchive` (stops run, flips to `archiving`) then background `finishArchive` (archive script → kill PTYs → `git worktree remove --force`). The git **branch is kept** so the workspace can be restored.
 - **Restore/Delete**: `restoreWorktree` re-adds the worktree on the existing branch (prunes stale refs first); `deleteArchivedWorkspace` removes worktree + deletes the branch permanently.
-- **Self-healing on launch** (`restoreSessions`): a workspace left in a transient state by an interrupted run (`archiving`/`setting_up`) is reconciled to `active` or `archived` based on whether its worktree dir still exists, then `claude` is restarted for every live workspace (PTYs are memory-only and die on quit).
+- **Self-healing on launch** (`restoreSessions`): a workspace left in a transient state by an interrupted run (`archiving`/`setting_up`) is reconciled to `active` or `archived` based on whether its worktree dir still exists, then the Claude chat session is restarted for every live workspace (processes are memory-only and die on quit; the conversation itself resumes via the persisted `claudeSessionId`).
 
 ### Projects
 

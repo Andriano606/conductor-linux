@@ -60,12 +60,19 @@ vi.mock('../../src/main/git', () => git)
 
 const ptym = vi.hoisted(() => ({
   runTask: vi.fn(async () => 0),
-  startClaude: vi.fn(),
   startShell: vi.fn(),
   killWorkspace: vi.fn(),
   stopTask: vi.fn()
 }))
 vi.mock('../../src/main/ptyManager', () => ptym)
+
+const chat = vi.hoisted(() => ({
+  startChat: vi.fn(),
+  killChat: vi.fn(),
+  stopChatProc: vi.fn(),
+  deleteChatHistory: vi.fn()
+}))
+vi.mock('../../src/main/claudeChat', () => chat)
 
 const reaper = vi.hoisted(() => ({ reapWorkspaceProcesses: vi.fn(async () => [] as number[]) }))
 vi.mock('../../src/main/procReaper', () => reaper)
@@ -195,6 +202,8 @@ describe('deleteProject', () => {
     await deleteProject('p1')
     expect(ptym.killWorkspace).toHaveBeenCalledWith('a')
     expect(ptym.killWorkspace).toHaveBeenCalledWith('b')
+    expect(chat.deleteChatHistory).toHaveBeenCalledWith('a')
+    expect(chat.deleteChatHistory).toHaveBeenCalledWith('b')
     expect(git.worktreeRemove).toHaveBeenCalledWith('/repo', '/wt/proj/a')
     expect(git.branchDelete).toHaveBeenCalledWith('/repo', 'b')
     expect(store.removeWorkspace).toHaveBeenCalledWith('a')
@@ -322,7 +331,7 @@ describe('finishSetup', () => {
     await finishSetup('a', onChange)
     expect(ptym.runTask).toHaveBeenCalledWith(expect.objectContaining({ scriptPath: '/setup.sh' }))
     expect(store.updateWorkspaceStatus).toHaveBeenCalledWith('a', 'active')
-    expect(ptym.startClaude).toHaveBeenCalled()
+    expect(chat.startChat).toHaveBeenCalled()
     expect(onChange).toHaveBeenCalled()
     // Setup is reset to pending while it runs, then resolved by the exit code.
     expect(store.updateWorkspaceSetupStatus).toHaveBeenCalledWith('a', 'pending')
@@ -354,12 +363,12 @@ describe('finishSetup', () => {
     const pending = finishSetup('a', onChange)
     // The window must open without waiting for setup: claude + active + notify
     // have all happened even though the setup task is still running.
-    expect(ptym.startClaude).toHaveBeenCalled()
+    expect(chat.startChat).toHaveBeenCalled()
     expect(store.updateWorkspaceStatus).toHaveBeenCalledWith('a', 'active')
     expect(onChange).toHaveBeenCalled()
     expect(ptym.runTask).toHaveBeenCalled()
     // claude was spawned before the setup task was launched.
-    expect(ptym.startClaude.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(chat.startChat.mock.invocationCallOrder[0]).toBeLessThan(
       ptym.runTask.mock.invocationCallOrder[0]
     )
     resolveTask(0)
@@ -371,7 +380,7 @@ describe('finishSetup', () => {
       mkWs({ id: 'a', status: 'setting_up' })
     ])
     await finishSetup('a', vi.fn())
-    expect(ptym.startClaude).toHaveBeenCalledWith(
+    expect(chat.startChat).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'a', args: '--dangerously-skip-permissions' })
     )
   })
@@ -386,7 +395,7 @@ describe('finishSetup', () => {
     // rejection still propagates afterwards — finishSetup is fire-and-forget in ipc.ts.
     await expect(finishSetup('a', onChange)).rejects.toThrow('boom')
     expect(store.updateWorkspaceStatus).toHaveBeenCalledWith('a', 'active')
-    expect(ptym.startClaude).toHaveBeenCalled()
+    expect(chat.startChat).toHaveBeenCalled()
     expect(onChange).toHaveBeenCalled()
   })
 
@@ -394,19 +403,19 @@ describe('finishSetup', () => {
     store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', status: 'setting_up' })])
     await finishSetup('a', vi.fn())
     expect(ptym.runTask).not.toHaveBeenCalled()
-    expect(ptym.startClaude).toHaveBeenCalled()
+    expect(chat.startChat).toHaveBeenCalled()
     expect(store.updateWorkspaceSetupStatus).toHaveBeenCalledWith('a', 'success')
   })
 
   it('returns without throwing for an unknown id', async () => {
     await expect(finishSetup('nope', vi.fn())).resolves.toBeUndefined()
-    expect(ptym.startClaude).not.toHaveBeenCalled()
+    expect(chat.startChat).not.toHaveBeenCalled()
   })
 
   it('returns without starting claude when the project is gone', async () => {
     store._set({ ...settings }, [], [mkWs({ id: 'a', status: 'setting_up', projectId: 'gone' })])
     await expect(finishSetup('a', vi.fn())).resolves.toBeUndefined()
-    expect(ptym.startClaude).not.toHaveBeenCalled()
+    expect(chat.startChat).not.toHaveBeenCalled()
   })
 })
 
@@ -431,7 +440,7 @@ describe('restoreSessions healing matrix', () => {
     // archived is skipped entirely.
     expect(store.updateWorkspaceStatus).not.toHaveBeenCalledWith('archived', expect.anything())
 
-    const started = ptym.startClaude.mock.calls.map((c) => c[0].id)
+    const started = chat.startChat.mock.calls.map((c) => c[0].id)
     expect(started.sort()).toEqual(['active-live', 'arch-live', 'setup-live'])
 
     // Each live workspace has its orphaned processes reaped before Claude restarts.
@@ -440,7 +449,7 @@ describe('restoreSessions healing matrix', () => {
     // The reap for a workspace must precede its Claude restart (env carries our
     // marker, so Claude must not be running when we scan).
     const reapOrder = reaper.reapWorkspaceProcesses.mock.invocationCallOrder[0]
-    const startOrder = ptym.startClaude.mock.invocationCallOrder[0]
+    const startOrder = chat.startChat.mock.invocationCallOrder[0]
     expect(reapOrder).toBeLessThan(startOrder)
   })
 
@@ -450,7 +459,7 @@ describe('restoreSessions healing matrix', () => {
     ])
     fsm.existsSync.mockReturnValue(true)
     await restoreSessions()
-    expect(ptym.startClaude).toHaveBeenCalledWith(
+    expect(chat.startChat).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'a', args: '--dangerously-skip-permissions' })
     )
   })
@@ -459,7 +468,7 @@ describe('restoreSessions healing matrix', () => {
     store._set({ ...settings }, [], [mkWs({ id: 'a', status: 'active', projectId: 'gone' })])
     fsm.existsSync.mockReturnValue(true)
     await restoreSessions()
-    expect(ptym.startClaude).not.toHaveBeenCalled()
+    expect(chat.startChat).not.toHaveBeenCalled()
   })
 
   it('marks a setup left pending (killed by the quit) as failed', async () => {
@@ -532,11 +541,14 @@ describe('finishArchive', () => {
     const onChange = vi.fn()
     await finishArchive('a', onChange)
     expect(ptym.runTask).toHaveBeenCalledWith(expect.objectContaining({ scriptPath: '/arch.sh' }))
+    expect(chat.killChat).toHaveBeenCalledWith('a')
     expect(ptym.killWorkspace).toHaveBeenCalledWith('a')
     expect(reaper.reapWorkspaceProcesses).toHaveBeenCalledWith('/wt/proj/ws')
     expect(git.worktreeRemove).toHaveBeenCalledWith('/repo', '/wt/proj/ws')
     expect(store.updateWorkspaceStatus).toHaveBeenCalledWith('a', 'archived')
     expect(onChange).toHaveBeenCalled()
+    // Archiving keeps the persisted chat history — it reloads on restore.
+    expect(chat.deleteChatHistory).not.toHaveBeenCalled()
   })
 
   it('still archives and notifies when a step throws', async () => {
@@ -605,6 +617,8 @@ describe('deleteArchivedWorkspace', () => {
     fsm.existsSync.mockReturnValue(true)
     await deleteArchivedWorkspace('a')
     expect(ptym.killWorkspace).toHaveBeenCalledWith('a')
+    // Permanent delete also drops the persisted chat history.
+    expect(chat.deleteChatHistory).toHaveBeenCalledWith('a')
     expect(reaper.reapWorkspaceProcesses).toHaveBeenCalledWith('/wt/proj/ws')
     expect(git.worktreeRemove).toHaveBeenCalledWith('/repo', '/wt/proj/ws')
     expect(git.branchDelete).toHaveBeenCalledWith('/repo', 'feat')

@@ -158,6 +158,15 @@ export function updateWorkspaceSetupStatus(id: string, setupStatus: Workspace['s
   }
 }
 
+/** Persist the Claude chat session id so the conversation resumes on relaunch. */
+export function updateWorkspaceSessionId(id: string, sessionId: string | undefined): void {
+  const ws = data.workspaces.find((w) => w.id === id)
+  if (ws && ws.claudeSessionId !== sessionId) {
+    ws.claudeSessionId = sessionId
+    persist()
+  }
+}
+
 /**
  * Lowest free port starting at the configured startPort, skipping ports already
  * assigned to a workspace. Exposed to scripts as CONDUCTOR_PORT. Ports are
