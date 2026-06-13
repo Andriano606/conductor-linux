@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import type { Project, Settings, Workspace } from '../../src/shared/types'
+import type { CustomPrompt, Project, Settings, Workspace } from '../../src/shared/types'
 
 // app.getPath is the only electron surface store.ts touches.
 const h = vi.hoisted(() => ({ userData: '', home: '' }))
@@ -11,10 +11,12 @@ vi.mock('electron', () => ({
 }))
 
 import {
+  addCustomPrompt,
   addProject,
   addSession,
   addWorkspace,
   findSession,
+  getCustomPrompts,
   getProject,
   getProjects,
   getSettings,
@@ -22,11 +24,13 @@ import {
   getWorkspaces,
   initStore,
   nextPort,
+  removeCustomPrompt,
   removeProject,
   removeSession,
   removeWorkspace,
   renameSession,
   setSettings,
+  updateCustomPrompt,
   updateProject,
   updateSessionClaudeParams,
   updateSessionSessionId,
@@ -62,6 +66,15 @@ const mkWs = (over: Partial<Workspace> = {}): Workspace => {
     ...over
   }
 }
+
+const mkPrompt = (over: Partial<CustomPrompt> = {}): CustomPrompt => ({
+  id: over.id ?? 'cp-' + Math.random().toString(36).slice(2),
+  title: 'prompt',
+  content: 'body',
+  createdAt: 0,
+  updatedAt: 0,
+  ...over
+})
 
 let tmp: string
 const dataFile = (): string => join(tmp, 'conductor-data.json')
@@ -199,6 +212,24 @@ describe('initStore', () => {
     expect(getProjects()).toEqual([])
     expect(getWorkspaces()).toEqual([])
   })
+
+  it('defaults customPrompts to [] for a file predating the prompt library', () => {
+    writeFileSync(
+      dataFile(),
+      JSON.stringify({ settings: { startPort: 3002 }, projects: [], workspaces: [] })
+    )
+    initStore()
+    expect(getCustomPrompts()).toEqual([])
+  })
+
+  it('loads persisted customPrompts', () => {
+    writeFileSync(
+      dataFile(),
+      JSON.stringify({ settings: {}, projects: [], workspaces: [], customPrompts: [mkPrompt({ id: 'x' })] })
+    )
+    initStore()
+    expect(getCustomPrompts().map((p) => p.id)).toEqual(['x'])
+  })
 })
 
 describe('settings persistence', () => {
@@ -249,6 +280,33 @@ describe('project CRUD', () => {
     expect(getProjects()).toHaveLength(1)
     removeProject('a')
     expect(getProjects()).toHaveLength(0)
+  })
+})
+
+describe('custom prompt CRUD', () => {
+  beforeEach(() => initStore())
+
+  it('adds and reads prompts, persisting to disk', () => {
+    addCustomPrompt(mkPrompt({ id: 'a', title: 'one' }))
+    addCustomPrompt(mkPrompt({ id: 'b', title: 'two' }))
+    expect(getCustomPrompts().map((p) => p.id)).toEqual(['a', 'b'])
+    expect(JSON.parse(readFileSync(dataFile(), 'utf8')).customPrompts).toHaveLength(2)
+  })
+
+  it('updateCustomPrompt replaces by id and returns it; unknown id is a no-op', () => {
+    addCustomPrompt(mkPrompt({ id: 'a', content: 'old', updatedAt: 0 }))
+    const saved = updateCustomPrompt(mkPrompt({ id: 'a', content: 'new', updatedAt: 99 }))
+    expect(saved?.content).toBe('new')
+    expect(getCustomPrompts()[0]).toMatchObject({ content: 'new', updatedAt: 99 })
+    expect(updateCustomPrompt(mkPrompt({ id: 'missing' }))).toBeUndefined()
+  })
+
+  it('removes a prompt; removing an unknown id is a no-op', () => {
+    addCustomPrompt(mkPrompt({ id: 'a' }))
+    removeCustomPrompt('missing')
+    expect(getCustomPrompts()).toHaveLength(1)
+    removeCustomPrompt('a')
+    expect(getCustomPrompts()).toHaveLength(0)
   })
 })
 

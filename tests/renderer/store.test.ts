@@ -8,6 +8,7 @@ const initial = {
   settings: null,
   projects: [],
   workspaces: [],
+  customPrompts: [],
   activeId: null,
   activeKind: 'claude' as const,
   showSettings: false,
@@ -42,9 +43,13 @@ describe('load', () => {
     api.getSettings.mockResolvedValue(baseSettings)
     api.listProjects.mockResolvedValue([mkProject()])
     api.listWorkspaces.mockResolvedValue(ws)
+    api.listCustomPrompts.mockResolvedValue([
+      { id: 'cp', title: 't', content: 'c', createdAt: 0, updatedAt: 0 }
+    ])
     await get().load()
     expect(get().projects).toHaveLength(1)
     expect(get().workspaces).toHaveLength(2)
+    expect(get().customPrompts).toHaveLength(1)
     expect(get().activeId).toBe('live')
     expect(get().showSettings).toBe(false)
   })
@@ -147,6 +152,36 @@ describe('saveProject / deleteProject', () => {
     api.deleteProject.mockRejectedValue(new Error('busy'))
     await get().deleteProject('p1')
     expect(get().error).toBe('busy')
+  })
+})
+
+describe('custom prompts', () => {
+  it('setCustomPrompts replaces the list', () => {
+    get().setCustomPrompts([{ id: 'a', title: 't', content: 'c', createdAt: 0, updatedAt: 0 }])
+    expect(get().customPrompts.map((p) => p.id)).toEqual(['a'])
+  })
+
+  it('createCustomPrompt forwards title + content to the api', async () => {
+    await get().createCustomPrompt('My prompt', 'body')
+    expect(api.createCustomPrompt).toHaveBeenCalledWith('My prompt', 'body')
+    expect(get().error).toBeNull()
+  })
+
+  it('updateCustomPrompt forwards the prompt to the api', async () => {
+    const p = { id: 'a', title: 't', content: 'c2', createdAt: 0, updatedAt: 0 }
+    await get().updateCustomPrompt(p)
+    expect(api.updateCustomPrompt).toHaveBeenCalledWith(p)
+  })
+
+  it('deleteCustomPrompt forwards the id to the api', async () => {
+    await get().deleteCustomPrompt('a')
+    expect(api.deleteCustomPrompt).toHaveBeenCalledWith('a')
+  })
+
+  it('surfaces the error when a prompt mutation fails', async () => {
+    api.createCustomPrompt.mockRejectedValue(new Error('disk full'))
+    await get().createCustomPrompt('x', 'y')
+    expect(get().error).toBe('disk full')
   })
 })
 

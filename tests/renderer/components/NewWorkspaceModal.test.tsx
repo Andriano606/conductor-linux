@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { NewWorkspaceModal } from '../../../src/renderer/src/components/NewWorkspaceModal'
+import { NewWorkspaceModal, SUGGESTIONS } from '../../../src/renderer/src/components/NewWorkspaceModal'
 import { useStore } from '../../../src/renderer/src/store'
 import { Api, mkProject, mkWs, setupRenderer } from '../helpers'
 
@@ -45,17 +45,35 @@ describe('NewWorkspaceModal', () => {
   })
 
   it('seeds the name with a suggestion not already taken in the project', async () => {
-    // Occupy every suggested name except 'sofia' with existing workspaces.
-    const taken = ['lisbon', 'porto', 'kyiv', 'oslo', 'tokyo', 'cairo', 'lima', 'dakar', 'hanoi']
+    // Occupy every suggestion except the first; that free one must be chosen.
+    const free = SUGGESTIONS[0]
+    const taken = SUGGESTIONS.slice(1)
     useStore.setState({
       projects: [mkProject({ id: 'p1' })],
       newWorkspaceProjectId: 'p1',
       workspaces: taken.map((b, i) => mkWs({ id: `w${i}`, projectId: 'p1', name: b, branch: b }))
     })
     render(<NewWorkspaceModal />)
-    // The only free suggestion must be chosen.
-    expect((nameInput() as HTMLInputElement).value).toBe('sofia')
+    expect((nameInput() as HTMLInputElement).value).toBe(free)
     await waitFor(() => expect(screen.getByText('dev')).toBeInTheDocument())
+  })
+
+  it('seeds a free suffixed name when every suggestion is taken', async () => {
+    // Occupy every base suggestion so a plain pick would collide — a numeric
+    // suffix must be appended to land on a free name.
+    const taken = [...SUGGESTIONS]
+    useStore.setState({
+      projects: [mkProject({ id: 'p1' })],
+      newWorkspaceProjectId: 'p1',
+      workspaces: taken.map((b, i) => mkWs({ id: `w${i}`, projectId: 'p1', name: b, branch: b }))
+    })
+    render(<NewWorkspaceModal />)
+    const value = (nameInput() as HTMLInputElement).value
+    // Whatever was picked, it must be free (not in the taken set) and not flagged.
+    expect(taken).not.toContain(value)
+    expect(value).toMatch(/-\d+$/)
+    await waitFor(() => expect(screen.getByText('dev')).toBeInTheDocument())
+    expect(screen.queryByText(/вже існує/)).not.toBeInTheDocument()
   })
 
   it('flags a duplicate name within the project and disables submit', async () => {

@@ -24,6 +24,8 @@ npm test             # run the Vitest suite (main + renderer)
 
 Correctness gates: `npm run build` (runs `tsc` via electron-vite) for types, and `npm test` (Vitest) for behaviour. No linter or formatter is configured.
 
+**After completing a feature/change, always rebuild and restart the app.** The user launches Conductor from the installed application-manager icon, which runs the packaged `dist/*.AppImage` — `npm run build` alone only refreshes `out/` and the icon keeps launching the old code. So once the work is done and the gates above are green, run the `rebuild-and-restart-app` skill (`npm run dist` → `bash scripts/install-desktop.sh` → kill + relaunch the running instance) as the final step, without waiting to be asked. See `.claude/skills/rebuild-and-restart-app` for the exact steps and Linux gotchas (pkill self-match, sandbox can't signal the GUI app, stale SingletonLock).
+
 ## Architecture
 
 Three Electron processes, each a separate electron-vite build target (see `electron.vite.config.ts`). Types are shared via `src/shared/types.ts`; the renderer imports it through the `@shared` alias.

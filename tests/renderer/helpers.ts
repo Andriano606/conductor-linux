@@ -1,5 +1,5 @@
 import { vi } from 'vitest'
-import type { ChatSnapshot, Project, Settings, Workspace } from '../../src/shared/types'
+import type { ChatSnapshot, CustomPrompt, Project, Settings, Workspace } from '../../src/shared/types'
 import { useStore } from '../../src/renderer/src/store'
 import { useChatStore } from '../../src/renderer/src/chatStore'
 
@@ -52,6 +52,17 @@ export function makeApi() {
     updateProject: vi.fn(async (p: Project) => p),
     deleteProject: vi.fn(async () => {}),
     onProjectsChanged: vi.fn(() => () => {}),
+    listCustomPrompts: vi.fn(async () => [] as CustomPrompt[]),
+    createCustomPrompt: vi.fn(async (title: string, content: string) => ({
+      id: 'cp-new',
+      title,
+      content,
+      createdAt: 0,
+      updatedAt: 0
+    })),
+    updateCustomPrompt: vi.fn(async (p: CustomPrompt) => p),
+    deleteCustomPrompt: vi.fn(async () => {}),
+    onCustomPromptsChanged: vi.fn(() => () => {}),
     listWorkspaces: vi.fn(async () => [] as Workspace[]),
     listBranches: vi.fn(async () => ({
       branches: ['main'],
@@ -105,6 +116,7 @@ export function resetStore(): void {
     settings: null,
     projects: [],
     workspaces: [],
+    customPrompts: [],
     activeId: null,
     activeKind: 'claude',
     showSettings: false,

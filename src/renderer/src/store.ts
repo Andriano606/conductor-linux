@@ -1,10 +1,19 @@
 import { create } from 'zustand'
-import type { Project, ProjectScripts, PtyKind, Settings, Workspace } from '@shared/types'
+import type {
+  CustomPrompt,
+  Project,
+  ProjectScripts,
+  PtyKind,
+  Settings,
+  Workspace
+} from '@shared/types'
 
 interface AppState {
   settings: Settings | null
   projects: Project[]
   workspaces: Workspace[]
+  /** Global prompt library, kept in sync via onCustomPromptsChanged. */
+  customPrompts: CustomPrompt[]
   activeId: string | null
   activeKind: PtyKind
   showSettings: boolean
@@ -67,6 +76,10 @@ interface AppState {
   setClaudeBusy: (id: string, busy: boolean) => void
   setProjects: (projects: Project[]) => void
   setWorkspaces: (ws: Workspace[]) => void
+  setCustomPrompts: (prompts: CustomPrompt[]) => void
+  createCustomPrompt: (title: string, content: string) => Promise<void>
+  updateCustomPrompt: (prompt: CustomPrompt) => Promise<void>
+  deleteCustomPrompt: (id: string) => Promise<void>
   clearError: () => void
 }
 
@@ -74,6 +87,7 @@ export const useStore = create<AppState>((set, get) => ({
   settings: null,
   projects: [],
   workspaces: [],
+  customPrompts: [],
   activeId: null,
   activeKind: 'claude',
   showSettings: false,
@@ -91,12 +105,13 @@ export const useStore = create<AppState>((set, get) => ({
   confirmRequest: null,
 
   load: async () => {
-    const [settings, projects, workspaces] = await Promise.all([
+    const [settings, projects, workspaces, customPrompts] = await Promise.all([
       window.api.getSettings(),
       window.api.listProjects(),
-      window.api.listWorkspaces()
+      window.api.listWorkspaces(),
+      window.api.listCustomPrompts()
     ])
-    set({ settings, projects, workspaces })
+    set({ settings, projects, workspaces, customPrompts })
     const live = workspaces.filter((w) => w.status !== 'archived')
     if (!get().activeId && live.length > 0) set({ activeId: live[0].id })
   },
@@ -291,5 +306,34 @@ export const useStore = create<AppState>((set, get) => ({
 
   setProjects: (projects) => set({ projects }),
   setWorkspaces: (ws) => set({ workspaces: ws }),
+
+  // Prompt-library CRUD: the wrappers only call into main — the list refreshes
+  // through the onCustomPromptsChanged subscription.
+  setCustomPrompts: (prompts) => set({ customPrompts: prompts }),
+  createCustomPrompt: async (title, content) => {
+    set({ error: null })
+    try {
+      await window.api.createCustomPrompt(title, content)
+    } catch (e) {
+      set({ error: (e as Error).message })
+    }
+  },
+  updateCustomPrompt: async (prompt) => {
+    set({ error: null })
+    try {
+      await window.api.updateCustomPrompt(prompt)
+    } catch (e) {
+      set({ error: (e as Error).message })
+    }
+  },
+  deleteCustomPrompt: async (id) => {
+    set({ error: null })
+    try {
+      await window.api.deleteCustomPrompt(id)
+    } catch (e) {
+      set({ error: (e as Error).message })
+    }
+  },
+
   clearError: () => set({ error: null })
 }))

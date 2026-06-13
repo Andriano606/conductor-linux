@@ -41,6 +41,21 @@ export interface Project {
   createdAt: number
 }
 
+/**
+ * A reusable, user-authored prompt stored in the global prompt library. Shared
+ * across every project and workspace; inserted into the Claude chat input on
+ * demand from the library modal.
+ */
+export interface CustomPrompt {
+  id: string
+  /** Short label shown in the library list. */
+  title: string
+  /** The prompt body inserted into the chat input. */
+  content: string
+  createdAt: number
+  updatedAt: number
+}
+
 /** The project fields supplied at create time or edited later. */
 export interface ProjectScripts {
   setupScript?: string

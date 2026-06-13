@@ -2,12 +2,13 @@ import { app } from 'electron'
 import { randomUUID } from 'crypto'
 import { basename, join } from 'path'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
-import type { ChatSession, Project, Settings, Workspace } from '../shared/types'
+import type { ChatSession, CustomPrompt, Project, Settings, Workspace } from '../shared/types'
 
 interface PersistedData {
   settings: Settings
   projects: Project[]
   workspaces: Workspace[]
+  customPrompts: CustomPrompt[]
 }
 
 let dataPath = ''
@@ -22,7 +23,8 @@ function defaults(): PersistedData {
       claudeArgs: '--dangerously-skip-permissions'
     },
     projects: [],
-    workspaces: []
+    workspaces: [],
+    customPrompts: []
   }
 }
 
@@ -91,7 +93,10 @@ function migrate(parsed: Record<string, unknown>): PersistedData {
     return { ...w, sessions: [session] }
   })
 
-  return { settings, projects, workspaces }
+  // The prompt library is a flat global collection; older files predate it.
+  const customPrompts = (parsed.customPrompts as CustomPrompt[]) ?? []
+
+  return { settings, projects, workspaces, customPrompts }
 }
 
 export function initStore(): void {
@@ -148,6 +153,30 @@ export function updateProject(project: Project): Project | undefined {
 
 export function removeProject(id: string): void {
   data.projects = data.projects.filter((p) => p.id !== id)
+  persist()
+}
+
+// ---- Custom prompts (global prompt library) ----
+export function getCustomPrompts(): CustomPrompt[] {
+  return data.customPrompts
+}
+
+export function addCustomPrompt(prompt: CustomPrompt): void {
+  data.customPrompts.push(prompt)
+  persist()
+}
+
+/** Replace a prompt by id (no-op if it's gone). Returns the stored prompt. */
+export function updateCustomPrompt(prompt: CustomPrompt): CustomPrompt | undefined {
+  const i = data.customPrompts.findIndex((p) => p.id === prompt.id)
+  if (i === -1) return undefined
+  data.customPrompts[i] = prompt
+  persist()
+  return prompt
+}
+
+export function removeCustomPrompt(id: string): void {
+  data.customPrompts = data.customPrompts.filter((p) => p.id !== id)
   persist()
 }
 

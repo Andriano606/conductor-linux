@@ -1,14 +1,26 @@
 import { spawn } from 'child_process'
+import { randomUUID } from 'crypto'
 import { BrowserWindow, Menu, clipboard, dialog, ipcMain, shell } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
-import type { ChatAnswer, Project, ProjectScripts, PtyKind, Settings } from '../shared/types'
+import type {
+  ChatAnswer,
+  CustomPrompt,
+  Project,
+  ProjectScripts,
+  PtyKind,
+  Settings
+} from '../shared/types'
 import {
+  addCustomPrompt,
+  getCustomPrompts,
   getProject,
   getProjects,
   getSettings,
   getWorkspace,
   getWorkspaces,
+  removeCustomPrompt,
   setSettings,
+  updateCustomPrompt,
   updateProject
 } from './store'
 import { isGitRepo, listBranches } from './git'
@@ -46,6 +58,12 @@ export function notifyWorkspacesChanged(): void {
 function notifyProjectsChanged(): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send('projects:changed', getProjects())
+  }
+}
+
+function notifyCustomPromptsChanged(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('customPrompts:changed', getCustomPrompts())
   }
 }
 
@@ -98,6 +116,25 @@ export function registerIpc(): void {
     await deleteProject(id)
     notifyProjectsChanged()
     notifyWorkspacesChanged()
+  })
+
+  // ---- Custom prompts (global prompt library) ----
+  ipcMain.handle('customPrompts:list', () => getCustomPrompts())
+  ipcMain.handle('customPrompt:create', (_e, title: string, content: string) => {
+    const now = Date.now()
+    const prompt: CustomPrompt = { id: randomUUID(), title, content, createdAt: now, updatedAt: now }
+    addCustomPrompt(prompt)
+    notifyCustomPromptsChanged()
+    return prompt
+  })
+  ipcMain.handle('customPrompt:update', (_e, prompt: CustomPrompt) => {
+    const saved = updateCustomPrompt({ ...prompt, updatedAt: Date.now() })
+    if (saved) notifyCustomPromptsChanged()
+    return saved
+  })
+  ipcMain.handle('customPrompt:delete', (_e, id: string) => {
+    removeCustomPrompt(id)
+    notifyCustomPromptsChanged()
   })
 
   // ---- Workspaces ----

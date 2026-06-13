@@ -2,7 +2,10 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ChatItem, ChatPending, ChatQuestion } from '@shared/types'
+import { promptVarValues, substitutePromptVars } from '@shared/promptVars'
 import { useChatStore } from '../chatStore'
+import { useStore } from '../store'
+import { PromptLibraryModal } from './PromptLibraryModal'
 
 /**
  * The Claude tab: our own chat UI over the structured stream-json session.
@@ -14,6 +17,15 @@ import { useChatStore } from '../chatStore'
 export function ChatView({ id }: { id: string }): JSX.Element {
   const chat = useChatStore((s) => s.byId[id])
   const attach = useChatStore((s) => s.attach)
+  // The workspace/project owning this session, for $CONDUCTOR_* substitution
+  // when a library prompt is inserted.
+  const workspaces = useStore((s) => s.workspaces)
+  const projects = useStore((s) => s.projects)
+  const promptValues = useMemo(() => {
+    const ws = workspaces.find((w) => w.sessions.some((sn) => sn.id === id))
+    const project = ws ? projects.find((p) => p.id === ws.projectId) : undefined
+    return promptVarValues(ws, project)
+  }, [workspaces, projects, id])
 
   const [draft, setDraft] = useState('')
   // Sequential answering of a multi-question AskUserQuestion call.
@@ -29,6 +41,8 @@ export function ChatView({ id }: { id: string }): JSX.Element {
   // user dismissed it with Esc (until the draft changes again).
   const [slashSel, setSlashSel] = useState(0)
   const [slashDismissed, setSlashDismissed] = useState(false)
+  // Prompt-library modal visibility (local to this chat tab).
+  const [libraryOpen, setLibraryOpen] = useState(false)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
@@ -311,6 +325,13 @@ export function ChatView({ id }: { id: string }): JSX.Element {
           </div>
         )}
         <div className="chat-inputrow">
+          <button
+            className="chat-library"
+            title="Бібліотека промтів"
+            onClick={() => setLibraryOpen(true)}
+          >
+            📚
+          </button>
           <textarea
             ref={inputRef}
             className="chat-input"
@@ -347,6 +368,20 @@ export function ChatView({ id }: { id: string }): JSX.Element {
           )}
         </div>
       </div>
+      {libraryOpen && (
+        <PromptLibraryModal
+          onClose={() => setLibraryOpen(false)}
+          onInsert={(text) => {
+            // Substitute $CONDUCTOR_* with this workspace's live values, then mirror
+            // completeSlash: fill the draft and focus so the user can edit before
+            // sending (insertion never sends on its own).
+            setDraft(substitutePromptVars(text, promptValues))
+            setHistIndex(null)
+            setLibraryOpen(false)
+            inputRef.current?.focus()
+          }}
+        />
+      )}
     </div>
   )
 }

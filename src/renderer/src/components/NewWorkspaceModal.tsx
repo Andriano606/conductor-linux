@@ -1,27 +1,85 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../store'
 
-const SUGGESTIONS = [
-  'lisbon',
-  'porto',
-  'kyiv',
-  'oslo',
-  'tokyo',
-  'cairo',
-  'lima',
-  'dakar',
-  'hanoi',
-  'sofia'
+// Suggested workspace names: Ukrainian cities, transliterated to lowercase
+// latin and hyphenated so each is a valid git branch name. Exported so tests can
+// assert against the live list rather than hardcoded strings.
+export const SUGGESTIONS = [
+  'kyiv', 'kharkiv', 'odesa', 'dnipro', 'donetsk', 'zaporizhzhia', 'lviv', 'kryvyi-rih',
+  'mykolaiv', 'mariupol', 'luhansk', 'vinnytsia', 'makiivka', 'simferopol', 'chernihiv',
+  'kherson', 'poltava', 'khmelnytskyi', 'cherkasy', 'chernivtsi', 'zhytomyr', 'sumy', 'rivne',
+  'ivano-frankivsk', 'ternopil', 'lutsk', 'uzhhorod', 'bila-tserkva', 'kramatorsk', 'melitopol',
+  'kropyvnytskyi', 'sloviansk', 'nikopol', 'berdiansk', 'sevastopol', 'kremenchuk', 'alchevsk',
+  'brovary', 'izmail', 'boryspil', 'kovel', 'irpin', 'lozova', 'kamianske', 'oleksandriia',
+  'konotop', 'pavlohrad', 'lysychansk', 'yevpatoriia', 'sievierodonetsk', 'kerch', 'fastiv',
+  'drohobych', 'nizhyn', 'novomoskovsk', 'smila', 'vyshhorod', 'chornomorsk', 'kalush', 'korosten',
+  'kolomyia', 'stryi', 'enerhodar', 'shostka', 'mukachevo', 'yalta', 'feodosiia', 'svitlovodsk',
+  'marhanets', 'horlivka', 'rubizhne', 'dobropillia', 'myrnohrad', 'selydove', 'vuhledar',
+  'avdiivka', 'yasynuvata', 'debaltseve', 'kostiantynivka', 'druzhkivka', 'bakhmut', 'toretsk',
+  'chasiv-yar', 'siversk', 'lyman', 'vovchansk', 'chuhuiv', 'kupiansk', 'izium', 'balaklia',
+  'merefa', 'liubotyn', 'derhachi', 'zmiiv', 'bohodukhiv', 'krasnohrad',
+  'sambir', 'truskavets', 'boryslav', 'chervonohrad', 'sokal', 'novyi-rozdil', 'morshyn',
+  'zhydachiv', 'radekhiv', 'brody', 'busk', 'horodok', 'mostyska', 'yavoriv', 'rava-ruska',
+  'turka', 'skole', 'zolochiv',
+  'chortkiv', 'kremenets', 'berezhany', 'zboriv', 'terebovlia', 'buchach', 'zalishchyky', 'pochaiv',
+  'kopychyntsi', 'monastyryska', 'skalat', 'zbarazh', 'lanivtsi', 'pidhaitsi', 'husiatyn', 'shumsk',
+  'borshchiv',
+  'nadvirna', 'dolyna', 'bolekhiv', 'halych', 'tysmenytsia', 'sniatyn', 'tlumach', 'horodenka',
+  'kosiv', 'burshtyn', 'yaremche', 'rohatyn', 'bohorodchany', 'verkhovyna', 'kuty',
+  'novodnistrovsk', 'khotyn', 'storozhynets', 'vyzhnytsia', 'kitsman', 'zastavna', 'sokyriany',
+  'novoselytsia', 'vashkivtsi', 'putyla',
+  'khust', 'berehove', 'vynohradiv', 'svaliava', 'rakhiv', 'tiachiv', 'irshava', 'perechyn', 'chop',
+  'mizhhiria', 'velykyi-bereznyi', 'volovets',
+  'novovolynsk', 'volodymyr-volynskyi', 'kivertsi', 'rozhyshche', 'kamin-kashyrskyi', 'liuboml',
+  'horokhiv', 'berestechko', 'ustyluh',
+  'dubno', 'varash', 'kostopil', 'sarny', 'zdolbuniv', 'ostroh', 'korets', 'radyvyliv', 'berezne',
+  'dubrovytsia', 'rokytne',
+  'kamianets-podilskyi', 'shepetivka', 'netishyn', 'slavuta', 'starokostiantyniv', 'krasyliv',
+  'polonne', 'volochysk', 'derazhnia', 'iziaslav', 'dunaivtsi', 'khmilnyk',
+  'berdychiv', 'novohrad-volynskyi', 'malyn', 'korostyshiv', 'ovruch', 'radomyshl', 'andrushivka',
+  'baranivka', 'chudniv', 'olevsk',
+  'zhmerynka', 'mohyliv-podilskyi', 'koziatyn', 'ladyzhyn', 'haisyn', 'tulchyn', 'bar', 'lityn',
+  'kalynivka', 'yampil', 'bershad', 'illintsi', 'nemyriv', 'sharhorod', 'hnivan', 'pohrebyshche',
+  'znamianka', 'pomichna', 'novoukrainka', 'dolynska', 'bobrynets', 'mala-vyska', 'novomyrhorod',
+  'oleksandrivka', 'haivoron', 'holovanivsk',
+  'lubny', 'myrhorod', 'horishni-plavni', 'pyriatyn', 'hadiach', 'karlivka', 'kobeliaky', 'zinkiv',
+  'lokhvytsia', 'hlobyne', 'reshetylivka',
+  'okhtyrka', 'romny', 'hlukhiv', 'lebedyn', 'putyvl', 'krolevets', 'bilopillia', 'trostianets',
+  'seredyna-buda', 'druzhba',
+  'pryluky', 'novhorod-siverskyi', 'bakhmach', 'korop', 'mena', 'borzna', 'oster', 'semenivka',
+  'sosnytsia', 'horodnia', 'nosivka', 'ichnia', 'sribne',
+  'uman', 'zolotonosha', 'kaniv', 'vatutine', 'horodyshche', 'korsun-shevchenkivskyi', 'chyhyryn',
+  'zvenyhorodka', 'shpola', 'kamianka', 'talne', 'monastyryshche', 'zhashkiv',
+  'vasylkiv', 'obukhiv', 'bucha', 'slavutych', 'pereiaslav', 'yahotyn', 'skvyra', 'tarashcha',
+  'bohuslav', 'kaharlyk', 'myronivka', 'uzyn', 'berezan', 'vyshneve', 'borodianka',
+  'zhovti-vody', 'pokrov', 'synelnykove', 'ternivka', 'vilnohirsk', 'pershotravensk',
+  'apostolove', 'verkhnodniprovsk', 'zelenodolsk',
+  'tokmak', 'vasylivka', 'polohy', 'orikhiv', 'dniprorudne', 'huliaipole', 'prymorsk', 'molochansk',
+  'voznesensk', 'yuzhnoukrainsk', 'ochakiv', 'snihurivka', 'bashtanka', 'novyi-buh', 'nova-odesa',
+  'bilhorod-dnistrovskyi', 'podilsk', 'yuzhne', 'balta', 'rozdilna', 'teplodar', 'kiliia', 'artsyz',
+  'biliaivka', 'berezivka', 'ananiv', 'reni', 'tatarbunary', 'vylkove',
+  'nova-kakhovka', 'kakhovka', 'henichesk', 'oleshky', 'skadovsk', 'tavriisk', 'beryslav',
+  'hola-prystan',
+  'pokrovsk', 'volnovakha', 'mariinka', 'novohrodivka',
+  'starobilsk', 'svatove', 'kreminna', 'popasna', 'bilovodsk', 'schastia',
+  'dzhankoi', 'bakhchysarai', 'alushta', 'saky', 'armiansk', 'krasnoperekopsk', 'sudak', 'inkerman',
+  'alupka', 'bilohirsk'
 ]
 
 /**
- * Pick a random suggested name, skipping any already taken by a workspace in
- * this project. Falls back to the full list if every suggestion is taken.
+ * Pick a random suggested name that is not already taken by a workspace in this
+ * project. When every base suggestion is taken, append a numeric suffix
+ * (lisbon-2, lisbon-3, …) until a free name is found — so the seeded name is
+ * always available and the modal never opens on a blocking "already exists" error.
  */
 function pickSuggestion(used: Set<string>): string {
   const free = SUGGESTIONS.filter((s) => !used.has(s))
-  const pool = free.length ? free : SUGGESTIONS
-  return pool[Math.floor(performance.now()) % pool.length]
+  if (free.length) return free[Math.floor(performance.now()) % free.length]
+  // Every base name is taken — suffix one until it's free.
+  const baseName = SUGGESTIONS[Math.floor(performance.now()) % SUGGESTIONS.length]
+  let n = 2
+  while (used.has(`${baseName}-${n}`)) n++
+  return `${baseName}-${n}`
 }
 
 export function NewWorkspaceModal(): JSX.Element {

@@ -43,12 +43,21 @@ describe('buildEnv', () => {
     }
   })
 
-  it('injects all four CONDUCTOR_* vars with correct values', () => {
+  it('injects all CONDUCTOR_* vars with correct values', () => {
     const env = buildEnv(ws, project)
     expect(env.CONDUCTOR_WORKSPACE_PATH).toBe('/wt/proj/feature-x')
     expect(env.CONDUCTOR_ROOT_PATH).toBe('/repo')
     expect(env.CONDUCTOR_WORKSPACE_NAME).toBe('feature-x')
     expect(env.CONDUCTOR_PORT).toBe('3005')
+    expect(env.CONDUCTOR_BRANCH).toBe('feature-x')
+    expect(env.CONDUCTOR_BASE_BRANCH).toBe('main')
+    // No browserHost set on the project → host falls back to localhost.
+    expect(env.CONDUCTOR_HOST).toBe('localhost')
+  })
+
+  it('uses the project browserHost for CONDUCTOR_HOST when set', () => {
+    const env = buildEnv(ws, { ...project, browserHost: 'myapp.local' })
+    expect(env.CONDUCTOR_HOST).toBe('myapp.local')
   })
 
   it('exposes the port as a string', () => {

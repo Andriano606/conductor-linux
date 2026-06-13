@@ -4,6 +4,7 @@ import type {
   ChatEventPayload,
   ChatSession,
   ChatSnapshot,
+  CustomPrompt,
   Project,
   ProjectScripts,
   PtyData,
@@ -33,6 +34,19 @@ const api = {
     const listener = (_e: unknown, projects: Project[]): void => cb(projects)
     ipcRenderer.on('projects:changed', listener)
     return () => ipcRenderer.removeListener('projects:changed', listener)
+  },
+
+  // Custom prompts (global prompt library)
+  listCustomPrompts: (): Promise<CustomPrompt[]> => ipcRenderer.invoke('customPrompts:list'),
+  createCustomPrompt: (title: string, content: string): Promise<CustomPrompt> =>
+    ipcRenderer.invoke('customPrompt:create', title, content),
+  updateCustomPrompt: (prompt: CustomPrompt): Promise<CustomPrompt | undefined> =>
+    ipcRenderer.invoke('customPrompt:update', prompt),
+  deleteCustomPrompt: (id: string): Promise<void> => ipcRenderer.invoke('customPrompt:delete', id),
+  onCustomPromptsChanged: (cb: (prompts: CustomPrompt[]) => void): (() => void) => {
+    const listener = (_e: unknown, prompts: CustomPrompt[]): void => cb(prompts)
+    ipcRenderer.on('customPrompts:changed', listener)
+    return () => ipcRenderer.removeListener('customPrompts:changed', listener)
   },
 
   // Workspaces
