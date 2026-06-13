@@ -1,7 +1,8 @@
 import { app, BrowserWindow, Menu, shell } from 'electron'
 import { join } from 'path'
 import { initStore, updateSessionClaudeParams, updateSessionSessionId } from './store'
-import { registerIpc } from './ipc'
+import { notifyWorkspacesChanged, registerIpc } from './ipc'
+import { stopAllBranchWatches } from './branchWatcher'
 import { killAll, setMainWindow } from './ptyManager'
 import {
   killAllChats,
@@ -56,7 +57,7 @@ app.whenReady().then(() => {
   registerIpc()
   // Reaps orphaned processes from the previous session before restarting Claude;
   // fire-and-forget so window creation isn't blocked by the SIGTERM grace period.
-  void restoreSessions()
+  void restoreSessions(notifyWorkspacesChanged)
   createWindow()
 
   app.on('activate', () => {
@@ -67,10 +68,12 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   killAll()
   killAllChats()
+  stopAllBranchWatches()
   if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('before-quit', () => {
   killAll()
   killAllChats()
+  stopAllBranchWatches()
 })

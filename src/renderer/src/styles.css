@@ -660,6 +660,34 @@ button {
   margin-top: 20px;
 }
 
+/* In-app right-click menu (native menus break window focus on Linux). */
+.context-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 180px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+.context-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.context-menu button:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
 /* ---- Branch picker ---- */
 .branch-current {
   color: var(--accent);

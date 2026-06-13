@@ -11,7 +11,7 @@ import {
   setSettings,
   updateProject
 } from './store'
-import { currentBranch, isGitRepo, listBranches } from './git'
+import { isGitRepo, listBranches } from './git'
 import { workspaceUrl } from '../shared/workspaceUrl'
 import { attach, resize, stopTask, write } from './ptyManager'
 import {
@@ -29,13 +29,15 @@ import {
   killWorkspaceProcesses,
   projectNameFromPath,
   renameChatSession,
+  renameWorkspaceBranch,
   rerunSetup,
   restoreWorktree,
-  runWorkspace
+  runWorkspace,
+  syncWorkspaceBranch
 } from './workspaces'
 import { answerChat, attachChat, interruptChat, sendChatMessage } from './claudeChat'
 
-function notifyWorkspacesChanged(): void {
+export function notifyWorkspacesChanged(): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send('workspaces:changed', getWorkspaces())
   }
@@ -58,9 +60,16 @@ export function registerIpc(): void {
       ? listBranches(project.repoPath)
       : { branches: [], existingBranches: [], checkedOut: [], defaultBranch: '' }
   })
-  ipcMain.handle('git:currentBranch', (_e, id: string) => {
+  // Reads the live branch AND reconciles ws.branch with it (the user may have
+  // `git checkout`-ed in the terminal), broadcasting the change so every view
+  // catches up. The toolbar polls this on switch/focus, so no extra watcher.
+  ipcMain.handle('git:currentBranch', async (_e, id: string) => {
     const ws = getWorkspaces().find((w) => w.id === id)
-    return ws ? currentBranch(ws.path) : ''
+    if (!ws) return ''
+    const before = ws.branch
+    const live = await syncWorkspaceBranch(id)
+    if (ws.branch !== before) notifyWorkspacesChanged()
+    return live
   })
 
   ipcMain.handle('dialog:pickFile', async () => {
@@ -165,6 +174,12 @@ export function registerIpc(): void {
   ipcMain.handle('workspace:delete', async (_e, id: string) => {
     await deleteArchivedWorkspace(id)
     notifyWorkspacesChanged()
+  })
+
+  ipcMain.handle('workspace:renameBranch', async (_e, id: string, newName: string) => {
+    const result = await renameWorkspaceBranch(id, newName)
+    notifyWorkspacesChanged()
+    return result
   })
 
   // ---- Claude chat ---- (`id` is a session id, the opaque chat key)

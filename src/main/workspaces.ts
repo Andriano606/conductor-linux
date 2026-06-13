@@ -17,12 +17,15 @@ import {
   removeSession,
   removeWorkspace,
   renameSession,
+  updateWorkspaceBranch,
   updateWorkspaceStatus,
   updateWorkspaceSetupStatus
 } from './store'
 import {
   branchDelete,
   branchExists,
+  branchRename,
+  currentBranch,
   fastForwardToRemote,
   fetchQuiet,
   isGitRepo,
@@ -30,9 +33,11 @@ import {
   worktreeAdd,
   worktreeAddExisting,
   worktreeAddFromRemote,
+  worktreeGitDir,
   worktreePrune,
   worktreeRemove
 } from './git'
+import { startBranchWatch, stopBranchWatch } from './branchWatcher'
 import { buildEnv } from './env'
 import { runTask, startShell, killWorkspace, stopTask } from './ptyManager'
 import { deleteChatHistory, killChat, startChat, stopChatProc } from './claudeChat'
@@ -243,6 +248,83 @@ export async function createWorkspace(
 }
 
 /**
+ * Rename a workspace's git branch (`git branch -m`). Updates only `ws.branch`,
+ * not the workspace display name (`ws.name`). Renames locally only — a branch
+ * already pushed keeps its old name on origin; the returned `remoteExists` flags
+ * that so the UI can prompt the user to re-push. Validates the new name is free:
+ * not used by another workspace in the project and not an existing local branch.
+ */
+export async function renameWorkspaceBranch(
+  id: string,
+  newName: string
+): Promise<{ remoteExists: boolean }> {
+  const ws = getWorkspace(id)
+  if (!ws) throw new Error('Workspace not found.')
+  const project = getProject(ws.projectId)
+  if (!project) throw new Error('Project not found.')
+
+  const branch = newName.trim()
+  if (!branch) throw new Error('Name is required.')
+  const oldBranch = ws.branch
+  if (branch === oldBranch) return { remoteExists: false } // no-op
+
+  // No OTHER workspace in this project (active or archived) may reuse the name/branch.
+  if (
+    getWorkspaces().some(
+      (w) => w.id !== id && w.projectId === ws.projectId && (w.name === branch || w.branch === branch)
+    )
+  ) {
+    throw new Error(`A workspace named "${branch}" already exists.`)
+  }
+  if (await branchExists(project.repoPath, branch)) {
+    throw new Error(`Branch "${branch}" already exists. Choose another name.`)
+  }
+
+  await branchRename(project.repoPath, oldBranch, branch)
+  updateWorkspaceBranch(id, branch)
+  // The old branch may have been pushed; its remote-tracking ref outlives the
+  // local rename, so flag it for the user (we never touch origin ourselves).
+  const remoteExists = await remoteBranchExists(project.repoPath, oldBranch)
+  return { remoteExists }
+}
+
+/**
+ * Reconcile a workspace's persisted branch with what is actually checked out in
+ * its worktree (the user may `git checkout` in the terminal). Returns the live
+ * branch; a detached HEAD (empty) is ignored, leaving ws.branch as-is. Returns
+ * the persisted branch unchanged when the worktree is gone.
+ */
+export async function syncWorkspaceBranch(id: string): Promise<string> {
+  const ws = getWorkspace(id)
+  if (!ws) return ''
+  const live = await currentBranch(ws.path)
+  if (live && live !== ws.branch) updateWorkspaceBranch(id, live)
+  return live || ws.branch
+}
+
+/** Reconcile after a watched HEAD change and notify only if the branch moved. */
+async function reconcileWatchedBranch(id: string, onChange: () => void): Promise<void> {
+  const before = getWorkspace(id)?.branch
+  if (before === undefined) return
+  await syncWorkspaceBranch(id)
+  if (getWorkspace(id)?.branch !== before) onChange()
+}
+
+/**
+ * Start watching a live workspace's HEAD so an out-of-band branch switch/rename
+ * (a manual `git` in the terminal) reflects in the UI immediately. Best effort —
+ * a not-yet-ready/removed worktree just skips. Idempotent per workspace id.
+ */
+async function startWatchingBranch(ws: Workspace, onChange: () => void): Promise<void> {
+  try {
+    const gitDir = await worktreeGitDir(ws.path)
+    startBranchWatch(ws.id, gitDir, () => void reconcileWatchedBranch(ws.id, onChange))
+  } catch {
+    /* worktree gone / git error — leave it to the toolbar's focus refresh */
+  }
+}
+
+/**
  * Start the Claude session immediately and run the setup script (streaming to
  * the "task" terminal) in parallel — the Claude window must not wait for setup
  * to finish. Runs in the background after createWorkspace returns; calls
@@ -260,6 +342,8 @@ export async function finishSetup(id: string, onChange: () => void): Promise<voi
   // Reset to pending — matters on restore, where a prior success/error persists.
   updateWorkspaceSetupStatus(ws.id, 'pending')
   for (const session of ws.sessions) startSessionChat(ws, project, session)
+  // Watch HEAD so a manual branch switch/rename in the terminal reflects at once.
+  void startWatchingBranch(ws, onChange)
   onChange()
   // Run the setup script alongside the now-live Claude session; its exit code
   // becomes the persisted setup indicator. No script ⇒ nothing to fail.
@@ -314,7 +398,7 @@ export async function rerunSetup(id: string, onChange: () => void): Promise<void
  * re-start the Claude session for every usable workspace. PTYs live only in
  * memory and are killed on quit, so consoles must be restarted. Idempotent.
  */
-export async function restoreSessions(): Promise<void> {
+export async function restoreSessions(onChange: () => void = () => {}): Promise<void> {
   for (const ws of getWorkspaces()) {
     if (ws.status === 'archived') continue
     const project = getProject(ws.projectId)
@@ -340,6 +424,10 @@ export async function restoreSessions(): Promise<void> {
     // BEFORE starting Claude (whose env also carries our marker, so it must not be
     // running yet) to guarantee each workspace resumes from a clean slate.
     await reapWorkspaceProcesses(ws.path)
+    // Pull in any out-of-band branch change (a manual `git checkout` in a prior
+    // run) so archive/restore/delete operate on the branch actually checked out.
+    await syncWorkspaceBranch(ws.id)
+    void startWatchingBranch(ws, onChange)
     for (const session of ws.sessions) startSessionChat(ws, project, session)
   }
 }
@@ -446,6 +534,8 @@ export function beginArchive(id: string): void {
   // Stop the running app (run server) right away if it's up, so its port frees
   // and the archive script runs against a stopped app.
   stopTask(id)
+  // The worktree (and its gitdir) is about to be removed — drop the HEAD watcher.
+  stopBranchWatch(id)
   updateWorkspaceStatus(id, 'archiving')
 }
 
@@ -529,6 +619,7 @@ export async function restoreWorktree(id: string): Promise<void> {
 export async function deleteArchivedWorkspace(id: string): Promise<void> {
   const ws = getWorkspace(id)
   if (!ws) return
+  stopBranchWatch(id)
   const project = getProject(ws.projectId)
   for (const s of ws.sessions) {
     killChat(s.id)

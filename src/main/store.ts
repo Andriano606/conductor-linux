@@ -178,6 +178,14 @@ export function updateWorkspaceStatus(id: string, status: Workspace['status']): 
   }
 }
 
+export function updateWorkspaceBranch(id: string, branch: string): void {
+  const ws = data.workspaces.find((w) => w.id === id)
+  if (ws) {
+    ws.branch = branch
+    persist()
+  }
+}
+
 export function updateWorkspaceSetupStatus(id: string, setupStatus: Workspace['setupStatus']): void {
   const ws = data.workspaces.find((w) => w.id === id)
   if (ws) {

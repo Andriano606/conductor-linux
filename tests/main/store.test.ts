@@ -30,6 +30,7 @@ import {
   updateProject,
   updateSessionClaudeParams,
   updateSessionSessionId,
+  updateWorkspaceBranch,
   updateWorkspaceStatus
 } from '../../src/main/store'
 
@@ -281,6 +282,14 @@ describe('workspace CRUD', () => {
     updateWorkspaceStatus('a', 'active')
     expect(getWorkspace('a')?.status).toBe('active')
     expect(() => updateWorkspaceStatus('missing', 'archived')).not.toThrow()
+  })
+
+  it('updateWorkspaceBranch updates, persists and ignores unknown', () => {
+    addWorkspace(mkWs({ id: 'a', branch: 'feat' }))
+    updateWorkspaceBranch('a', 'feat-2')
+    expect(getWorkspace('a')?.branch).toBe('feat-2')
+    expect(JSON.parse(readFileSync(dataFile(), 'utf8')).workspaces[0].branch).toBe('feat-2')
+    expect(() => updateWorkspaceBranch('missing', 'x')).not.toThrow()
   })
 
   it('updateSessionSessionId sets, clears, persists and ignores unknown/no-op', () => {

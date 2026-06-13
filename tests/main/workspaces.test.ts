@@ -34,6 +34,10 @@ const store = vi.hoisted(() => {
       const w = workspaces.find((x) => x.id === id)
       if (w) w.status = status
     }),
+    updateWorkspaceBranch: vi.fn((id: string, branch: string) => {
+      const w = workspaces.find((x) => x.id === id)
+      if (w) w.branch = branch
+    }),
     updateWorkspaceSetupStatus: vi.fn((id: string, setupStatus: Workspace['setupStatus']) => {
       const w = workspaces.find((x) => x.id === id)
       if (w) w.setupStatus = setupStatus
@@ -68,17 +72,27 @@ vi.mock('../../src/main/store', () => store)
 const git = vi.hoisted(() => ({
   isGitRepo: vi.fn(async () => true),
   branchExists: vi.fn(async () => false),
+  branchRename: vi.fn(async () => {}),
+  currentBranch: vi.fn(async () => ''),
   remoteBranchExists: vi.fn(async () => false),
   fetchQuiet: vi.fn(async () => {}),
   fastForwardToRemote: vi.fn(async () => false),
   worktreeAdd: vi.fn(async () => {}),
   worktreeAddExisting: vi.fn(async () => {}),
   worktreeAddFromRemote: vi.fn(async () => {}),
+  worktreeGitDir: vi.fn(async () => '/repo/.git/worktrees/ws'),
   worktreePrune: vi.fn(async () => {}),
   worktreeRemove: vi.fn(async () => {}),
   branchDelete: vi.fn(async () => {})
 }))
 vi.mock('../../src/main/git', () => git)
+
+const watcher = vi.hoisted(() => ({
+  startBranchWatch: vi.fn(),
+  stopBranchWatch: vi.fn(),
+  stopAllBranchWatches: vi.fn()
+}))
+vi.mock('../../src/main/branchWatcher', () => watcher)
 
 const ptym = vi.hoisted(() => ({
   runTask: vi.fn(async () => 0),
@@ -114,11 +128,13 @@ import {
   finishSetup,
   killWorkspaceProcesses,
   projectNameFromPath,
+  renameWorkspaceBranch,
   rerunSetup,
   restoreSessions,
   restoreWorktree,
   runWorkspace,
-  slugify
+  slugify,
+  syncWorkspaceBranch
 } from '../../src/main/workspaces'
 
 const settings: Settings = {
@@ -161,6 +177,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   git.isGitRepo.mockResolvedValue(true)
   git.branchExists.mockResolvedValue(false)
+  git.branchRename.mockResolvedValue(undefined)
+  git.currentBranch.mockResolvedValue('')
   git.remoteBranchExists.mockResolvedValue(false)
   git.worktreeAdd.mockResolvedValue(undefined)
   git.worktreeRemove.mockResolvedValue(undefined)
@@ -708,6 +726,7 @@ describe('beginArchive', () => {
     store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', status: 'active' })])
     beginArchive('a')
     expect(ptym.stopTask).toHaveBeenCalledWith('a')
+    expect(watcher.stopBranchWatch).toHaveBeenCalledWith('a')
     expect(store.updateWorkspaceStatus).toHaveBeenCalledWith('a', 'archiving')
   })
   it('is a no-op for an unknown id', () => {
@@ -822,5 +841,85 @@ describe('deleteArchivedWorkspace', () => {
     await deleteArchivedWorkspace('nope')
     expect(ptym.killWorkspace).not.toHaveBeenCalled()
     expect(store.removeWorkspace).not.toHaveBeenCalled()
+  })
+})
+
+describe('renameWorkspaceBranch', () => {
+  it('renames the git branch and updates ws.branch only (not ws.name)', async () => {
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', name: 'feat', branch: 'feat' })])
+    const res = await renameWorkspaceBranch('a', 'feat-2')
+    expect(git.branchRename).toHaveBeenCalledWith('/repo', 'feat', 'feat-2')
+    expect(store.updateWorkspaceBranch).toHaveBeenCalledWith('a', 'feat-2')
+    const ws = store.getWorkspaces().find((w) => w.id === 'a')!
+    expect(ws.branch).toBe('feat-2')
+    expect(ws.name).toBe('feat') // display name untouched
+    expect(res).toEqual({ remoteExists: false })
+  })
+
+  it('trims the new name', async () => {
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', branch: 'feat' })])
+    await renameWorkspaceBranch('a', '  feat-2  ')
+    expect(git.branchRename).toHaveBeenCalledWith('/repo', 'feat', 'feat-2')
+  })
+
+  it('is a no-op when the name is unchanged', async () => {
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', branch: 'feat' })])
+    const res = await renameWorkspaceBranch('a', 'feat')
+    expect(git.branchRename).not.toHaveBeenCalled()
+    expect(res).toEqual({ remoteExists: false })
+  })
+
+  it('throws on an empty name', async () => {
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', branch: 'feat' })])
+    await expect(renameWorkspaceBranch('a', '   ')).rejects.toThrow(/required/)
+  })
+
+  it('rejects a name already used by another workspace in the project', async () => {
+    store._set({ ...settings }, [mkProject()], [
+      mkWs({ id: 'a', name: 'feat', branch: 'feat' }),
+      mkWs({ id: 'b', name: 'other', branch: 'other' })
+    ])
+    await expect(renameWorkspaceBranch('a', 'other')).rejects.toThrow(/already exists/)
+    expect(git.branchRename).not.toHaveBeenCalled()
+  })
+
+  it('rejects a name that already exists as a git branch', async () => {
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', branch: 'feat' })])
+    git.branchExists.mockResolvedValue(true)
+    await expect(renameWorkspaceBranch('a', 'taken')).rejects.toThrow(/already exists/)
+    expect(git.branchRename).not.toHaveBeenCalled()
+  })
+
+  it('reports remoteExists when the old branch was pushed', async () => {
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', branch: 'feat' })])
+    git.remoteBranchExists.mockResolvedValue(true)
+    const res = await renameWorkspaceBranch('a', 'feat-2')
+    expect(git.remoteBranchExists).toHaveBeenCalledWith('/repo', 'feat')
+    expect(res).toEqual({ remoteExists: true })
+  })
+})
+
+describe('syncWorkspaceBranch', () => {
+  it('updates ws.branch when the worktree is on a different branch', async () => {
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', branch: 'feat' })])
+    git.currentBranch.mockResolvedValue('manual')
+    const live = await syncWorkspaceBranch('a')
+    expect(live).toBe('manual')
+    expect(store.updateWorkspaceBranch).toHaveBeenCalledWith('a', 'manual')
+  })
+
+  it('leaves ws.branch unchanged on a detached HEAD (empty)', async () => {
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', branch: 'feat' })])
+    git.currentBranch.mockResolvedValue('')
+    const live = await syncWorkspaceBranch('a')
+    expect(live).toBe('feat')
+    expect(store.updateWorkspaceBranch).not.toHaveBeenCalled()
+  })
+
+  it('does nothing when the live branch already matches', async () => {
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', branch: 'feat' })])
+    git.currentBranch.mockResolvedValue('feat')
+    await syncWorkspaceBranch('a')
+    expect(store.updateWorkspaceBranch).not.toHaveBeenCalled()
   })
 })

@@ -7,6 +7,7 @@ import { TempRepo, tempPlainDir } from '../helpers/tempRepo'
 import {
   branchDelete,
   branchExists,
+  branchRename,
   checkedOutBranches,
   currentBranch,
   fastForwardToRemote,
@@ -16,6 +17,7 @@ import {
   worktreeAdd,
   worktreeAddExisting,
   worktreeAddFromRemote,
+  worktreeGitDir,
   worktreeList,
   worktreePrune,
   worktreeRemove
@@ -117,6 +119,39 @@ describe('branchDelete', () => {
     expect(await branchExists(repo.dir, 'to-delete')).toBe(true)
     await branchDelete(repo.dir, 'to-delete')
     expect(await branchExists(repo.dir, 'to-delete')).toBe(false)
+  })
+})
+
+describe('branchRename', () => {
+  it('renames a local branch', async () => {
+    repo.branch('old-name')
+    await branchRename(repo.dir, 'old-name', 'new-name')
+    expect(await branchExists(repo.dir, 'old-name')).toBe(false)
+    expect(await branchExists(repo.dir, 'new-name')).toBe(true)
+  })
+
+  it('renames the branch checked out in a worktree, following its HEAD', async () => {
+    const p = wtPath('wt-rename')
+    await worktreeAdd(repo.dir, p, 'live')
+    await branchRename(repo.dir, 'live', 'live-renamed')
+    expect(await currentBranch(p)).toBe('live-renamed')
+  })
+
+  it('rejects renaming onto an existing branch name', async () => {
+    repo.branch('one')
+    repo.branch('two')
+    await expect(branchRename(repo.dir, 'one', 'two')).rejects.toThrow()
+  })
+})
+
+describe('worktreeGitDir', () => {
+  it('resolves a linked worktree to its own gitdir (where HEAD lives)', async () => {
+    const p = wtPath('wt-gitdir')
+    await worktreeAdd(repo.dir, p, 'gd-branch')
+    const gitDir = await worktreeGitDir(p)
+    // A linked worktree's HEAD lives under <repo>/.git/worktrees/<name>, not <wt>/.git.
+    expect(gitDir).toContain('worktrees')
+    expect(existsSync(join(gitDir, 'HEAD'))).toBe(true)
   })
 })
 

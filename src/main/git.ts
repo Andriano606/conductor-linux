@@ -258,6 +258,31 @@ export async function branchDelete(repoPath: string, branch: string): Promise<vo
   await run('git', ['-C', repoPath, 'branch', '-D', branch])
 }
 
+/**
+ * Rename a local branch (`git branch -m`). Works even while the branch is checked
+ * out in a worktree — branches are shared across all worktrees of the repo, so
+ * the worktree's HEAD follows the rename. Does NOT touch any remote: an already
+ * pushed branch keeps its old name on origin until re-pushed. Git rejects an
+ * invalid ref name or a name that already exists; that error propagates.
+ */
+export async function branchRename(
+  repoPath: string,
+  oldBranch: string,
+  newBranch: string
+): Promise<void> {
+  await run('git', ['-C', repoPath, 'branch', '-m', oldBranch, newBranch])
+}
+
+/**
+ * Absolute path to a worktree's own git directory (where its HEAD lives). For a
+ * linked worktree this is `<repo>/.git/worktrees/<name>`, not `<wtPath>/.git`.
+ * Used to watch HEAD for out-of-band branch switches/renames.
+ */
+export async function worktreeGitDir(wtPath: string): Promise<string> {
+  const { stdout } = await run('git', ['-C', wtPath, 'rev-parse', '--absolute-git-dir'])
+  return stdout.trim()
+}
+
 /** Current branch checked out in a worktree ("HEAD detached…" → empty). */
 export async function currentBranch(wtPath: string): Promise<string> {
   try {

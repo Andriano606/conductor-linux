@@ -46,6 +46,8 @@ const api = {
     defaultBranch: string
   }> => ipcRenderer.invoke('git:branches', projectId),
   currentBranch: (id: string): Promise<string> => ipcRenderer.invoke('git:currentBranch', id),
+  renameBranch: (id: string, newName: string): Promise<{ remoteExists: boolean }> =>
+    ipcRenderer.invoke('workspace:renameBranch', id, newName),
   createWorkspace: (
     projectId: string,
     name: string,

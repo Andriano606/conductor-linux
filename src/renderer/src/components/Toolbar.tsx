@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { type MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import type { Workspace } from '@shared/types'
 import { workspaceUrl } from '@shared/workspaceUrl'
+import { RenameBranchModal } from './RenameBranchModal'
 
 export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
   // Current branch is read live from the worktree (the user may `git checkout`
@@ -19,6 +20,34 @@ export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
       window.removeEventListener('focus', refresh)
     }
   }, [ws.id, ws.status])
+
+  // Main keeps ws.branch authoritative — it reconciles to the live branch on a
+  // focus poll AND pushes instantly via the HEAD watcher (a manual branch
+  // switch/rename). Mirror that into curBranch so the badge updates immediately;
+  // otherwise a stale curBranch would shadow the pushed ws.branch (curBranch ||
+  // ws.branch) until the next focus refresh.
+  useEffect(() => {
+    setCurBranch(ws.branch)
+  }, [ws.branch])
+
+  // Right-click menu on the current-branch badge → rename. The menu is an in-app
+  // popup (native menus break window focus on Linux); it closes on any click or
+  // Escape, so we don't leak it across workspace switches.
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
+  const [renameOpen, setRenameOpen] = useState(false)
+  useEffect(() => {
+    if (!menuPos) return
+    const close = (): void => setMenuPos(null)
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setMenuPos(null)
+    }
+    window.addEventListener('click', close)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [menuPos])
 
   const {
     activeKind,
@@ -60,7 +89,16 @@ export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
         <div className="title">
           <div className="title-main">{ws.name}</div>
           <div className="branch-info">
-            <BranchBadge icon="⎇" label="Поточна гілка" value={curBranchName} kind="cur" />
+            <BranchBadge
+              icon="⎇"
+              label="Поточна гілка"
+              value={curBranchName}
+              kind="cur"
+              onContextMenu={(e) => {
+                e.preventDefault()
+                setMenuPos({ x: e.clientX, y: e.clientY })
+              }}
+            />
             <BranchBadge icon="←" label="Базова гілка" value={baseBranchName} kind="from" />
           </div>
         </div>
@@ -141,6 +179,29 @@ export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
           Скрипти
         </button>
       </div>
+      {menuPos && (
+        <div
+          className="context-menu"
+          style={{ left: menuPos.x, top: menuPos.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={() => {
+              setMenuPos(null)
+              setRenameOpen(true)
+            }}
+          >
+            Перейменувати гілку
+          </button>
+        </div>
+      )}
+      {renameOpen && (
+        <RenameBranchModal
+          ws={ws}
+          onClose={() => setRenameOpen(false)}
+          onRenamed={(n) => setCurBranch(n)}
+        />
+      )}
     </>
   )
 }
@@ -158,12 +219,14 @@ function BranchBadge({
   icon,
   label,
   value,
-  kind
+  kind,
+  onContextMenu
 }: {
   icon: string
   label: string
   value: string
   kind: 'cur' | 'from'
+  onContextMenu?: (e: ReactMouseEvent) => void
 }): JSX.Element {
   const [hovered, setHovered] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -186,6 +249,7 @@ function BranchBadge({
         type="button"
         className={`branch-badge ${kind}`}
         onClick={copy}
+        onContextMenu={onContextMenu}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >
