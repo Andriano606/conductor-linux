@@ -126,7 +126,7 @@ export function Sidebar(): JSX.Element {
                           {runningById[w.id] && (
                             <span className="ind ind-run" title="Run-скрипт запущено" />
                           )}
-                          {claudeBusyById[w.id] && <ClaudeBusyIcon />}
+                          {w.sessions.some((s) => claudeBusyById[s.id]) && <ClaudeBusyIcon />}
                         </span>
                       </div>
                       {w.status === 'archiving' && <span className="ws-badge">📦 архівується…</span>}

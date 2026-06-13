@@ -58,6 +58,34 @@ export type WorkspaceStatus = 'setting_up' | 'active' | 'archiving' | 'archived'
  */
 export type SetupStatus = 'pending' | 'success' | 'error'
 
+/**
+ * One Claude chat session inside a workspace. A workspace owns one or more of
+ * these; each is an independent `claude` process with its own transcript. The
+ * session `id` is the opaque chat key used everywhere (the entries Map in
+ * claudeChat.ts, the chats/<id>.json transcript file, the chat IPC channels and
+ * the renderer chatStore). The first session of a migrated workspace reuses the
+ * workspace id as its session id so existing transcripts keep working.
+ */
+export interface ChatSession {
+  id: string
+  /** User-chosen label; falls back to "Сесія N" by position when unset. */
+  title?: string
+  createdAt: number
+  /**
+   * Claude session id reported by this session's init event, persisted so the
+   * conversation is resumed (--resume) after an app restart.
+   */
+  claudeSessionId?: string
+  /**
+   * Model/effort/permission-mode chosen at runtime via the local /model,
+   * /effort and /plan commands, persisted so the choice survives restarts and
+   * archive/restore (passed as --model/--effort/--permission-mode on respawn).
+   */
+  claudeModel?: string
+  claudeEffort?: string
+  claudePermissionMode?: string
+}
+
 export interface Workspace {
   id: string
   /** The project (repository) this workspace belongs to. */
@@ -75,19 +103,8 @@ export interface Workspace {
   status: WorkspaceStatus
   /** Persisted setup-script outcome, surfaced as a sidebar indicator. */
   setupStatus?: SetupStatus
-  /**
-   * Claude session id reported by the chat session's init event, persisted so
-   * the conversation is resumed (--resume) after an app restart.
-   */
-  claudeSessionId?: string
-  /**
-   * Model/effort/permission-mode chosen at runtime via the local /model,
-   * /effort and /plan commands, persisted so the choice survives restarts and
-   * archive/restore (passed as --model/--effort/--permission-mode on respawn).
-   */
-  claudeModel?: string
-  claudeEffort?: string
-  claudePermissionMode?: string
+  /** The Claude chat sessions of this workspace (never empty for a live one). */
+  sessions: ChatSession[]
 }
 
 /**

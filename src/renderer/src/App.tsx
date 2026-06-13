@@ -10,6 +10,7 @@ import { NewWorkspaceModal } from './components/NewWorkspaceModal'
 import { ArchivedModal } from './components/ArchivedModal'
 import { ConfirmModal } from './components/ConfirmModal'
 import { ChatView } from './components/ChatView'
+import { SessionTabs } from './components/SessionTabs'
 import { disposeWorkspace, writeData } from './termRegistry'
 import { useChatStore } from './chatStore'
 
@@ -23,6 +24,7 @@ export function App(): JSX.Element {
     newWorkspaceProjectId,
     projectSettingsId,
     showArchived,
+    activeSessionByWorkspace,
     load,
     setProjects,
     setWorkspaces,
@@ -47,7 +49,7 @@ export function App(): JSX.Element {
       for (const w of prev) {
         if (w.status !== 'archived' && !liveNextIds.has(w.id)) {
           disposeWorkspace(w.id)
-          useChatStore.getState().dispose(w.id)
+          for (const s of w.sessions) useChatStore.getState().dispose(s.id)
         }
       }
       // Note: we intentionally do NOT switch tabs when setup finishes — the user
@@ -73,6 +75,11 @@ export function App(): JSX.Element {
   }, [])
 
   const active = workspaces.find((w) => w.id === activeId) ?? null
+  // Resolve the selected session, falling back to the first if the stored choice
+  // was closed (or never set).
+  const stored = active ? activeSessionByWorkspace[active.id] : undefined
+  const activeSessionId =
+    active?.sessions.find((s) => s.id === stored)?.id ?? active?.sessions[0]?.id ?? ''
 
   return (
     <div className="app">
@@ -82,7 +89,10 @@ export function App(): JSX.Element {
           <>
             <Toolbar ws={active} />
             {activeKind === 'claude' ? (
-              <ChatView id={active.id} />
+              <>
+                <SessionTabs ws={active} activeSessionId={activeSessionId} />
+                <ChatView id={activeSessionId} key={activeSessionId} />
+              </>
             ) : (
               <TerminalView id={active.id} kind={activeKind} />
             )}

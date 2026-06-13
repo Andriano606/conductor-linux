@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { randomUUID } from 'crypto'
 import { basename, join } from 'path'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
-import type { Project, Settings, Workspace } from '../shared/types'
+import type { ChatSession, Project, Settings, Workspace } from '../shared/types'
 
 interface PersistedData {
   settings: Settings
@@ -62,6 +62,34 @@ function migrate(parsed: Record<string, unknown>): PersistedData {
     projects = [legacy]
     workspaces = workspaces.map((w) => ({ ...w, projectId: w.projectId || legacy.id }))
   }
+
+  // Sessions migration: a workspace from before multi-session support has its
+  // Claude state (session id, model/effort/permission-mode) on the workspace and
+  // no `sessions` array. Fold those fields into a single session whose id reuses
+  // the workspace id, so the existing chats/<wsId>.json transcript and resume id
+  // keep working untouched.
+  workspaces = workspaces.map((w) => {
+    if (Array.isArray(w.sessions) && w.sessions.length) return w
+    const legacy = w as Workspace & {
+      claudeSessionId?: string
+      claudeModel?: string
+      claudeEffort?: string
+      claudePermissionMode?: string
+    }
+    const session: ChatSession = {
+      id: w.id,
+      createdAt: w.createdAt,
+      claudeSessionId: legacy.claudeSessionId,
+      claudeModel: legacy.claudeModel,
+      claudeEffort: legacy.claudeEffort,
+      claudePermissionMode: legacy.claudePermissionMode
+    }
+    delete legacy.claudeSessionId
+    delete legacy.claudeModel
+    delete legacy.claudeEffort
+    delete legacy.claudePermissionMode
+    return { ...w, sessions: [session] }
+  })
 
   return { settings, projects, workspaces }
 }
@@ -158,11 +186,53 @@ export function updateWorkspaceSetupStatus(id: string, setupStatus: Workspace['s
   }
 }
 
+// ---- Chat sessions (keyed by the opaque session id, which is the chat key) ----
+
+/** Locate a session by its id along with the workspace that owns it. */
+export function findSession(
+  sessionId: string
+): { ws: Workspace; session: ChatSession } | undefined {
+  for (const ws of data.workspaces) {
+    const session = ws.sessions?.find((s) => s.id === sessionId)
+    if (session) return { ws, session }
+  }
+  return undefined
+}
+
+/** Append a new chat session to a workspace and return it. */
+export function addSession(workspaceId: string): ChatSession | undefined {
+  const ws = data.workspaces.find((w) => w.id === workspaceId)
+  if (!ws) return undefined
+  const session: ChatSession = { id: randomUUID(), createdAt: Date.now() }
+  ws.sessions.push(session)
+  persist()
+  return session
+}
+
+/** Remove a chat session from its workspace (no-op for the last remaining one). */
+export function removeSession(sessionId: string): void {
+  const found = findSession(sessionId)
+  if (!found || found.ws.sessions.length <= 1) return
+  found.ws.sessions = found.ws.sessions.filter((s) => s.id !== sessionId)
+  persist()
+}
+
+/** Rename a chat session (empty title clears it, reverting to "Сесія N"). */
+export function renameSession(sessionId: string, title: string): void {
+  const found = findSession(sessionId)
+  if (!found) return
+  const next = title.trim() || undefined
+  if (found.session.title !== next) {
+    found.session.title = next
+    persist()
+  }
+}
+
 /** Persist the Claude chat session id so the conversation resumes on relaunch. */
-export function updateWorkspaceSessionId(id: string, sessionId: string | undefined): void {
-  const ws = data.workspaces.find((w) => w.id === id)
-  if (ws && ws.claudeSessionId !== sessionId) {
-    ws.claudeSessionId = sessionId
+export function updateSessionSessionId(id: string, sessionId: string | undefined): void {
+  const found = findSession(id)
+  if (found && found.session.claudeSessionId !== sessionId) {
+    found.session.claudeSessionId = sessionId
     persist()
   }
 }
@@ -171,23 +241,24 @@ export function updateWorkspaceSessionId(id: string, sessionId: string | undefin
  * Persist a runtime model/effort choice (from the local /model, /effort
  * commands) so it is reapplied as --model/--effort on the next (re)spawn.
  */
-export function updateWorkspaceClaudeParams(
+export function updateSessionClaudeParams(
   id: string,
   patch: { model?: string; effort?: string; permissionMode?: string }
 ): void {
-  const ws = data.workspaces.find((w) => w.id === id)
-  if (!ws) return
+  const found = findSession(id)
+  if (!found) return
+  const session = found.session
   let changed = false
-  if ('model' in patch && ws.claudeModel !== patch.model) {
-    ws.claudeModel = patch.model
+  if ('model' in patch && session.claudeModel !== patch.model) {
+    session.claudeModel = patch.model
     changed = true
   }
-  if ('effort' in patch && ws.claudeEffort !== patch.effort) {
-    ws.claudeEffort = patch.effort
+  if ('effort' in patch && session.claudeEffort !== patch.effort) {
+    session.claudeEffort = patch.effort
     changed = true
   }
-  if ('permissionMode' in patch && ws.claudePermissionMode !== patch.permissionMode) {
-    ws.claudePermissionMode = patch.permissionMode
+  if ('permissionMode' in patch && session.claudePermissionMode !== patch.permissionMode) {
+    session.claudePermissionMode = patch.permissionMode
     changed = true
   }
   if (changed) persist()

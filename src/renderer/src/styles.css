@@ -425,6 +425,82 @@ button {
   color: var(--text);
 }
 
+/* Claude session sub-tabs: a secondary strip above the chat view. */
+.session-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px 14px 0;
+  background: var(--term-bg);
+  flex-wrap: wrap;
+}
+.session-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-3);
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.session-tab.active {
+  background: var(--bg-2);
+  color: var(--text);
+  border-color: var(--accent);
+}
+.session-tab-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-tab-close {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.session-tab-close:hover {
+  color: var(--danger);
+}
+.session-tab-add {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-3);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+}
+.session-tab-add:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.session-tab-edit {
+  width: 120px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  padding: 2px 4px;
+}
+.session-tab-spin {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  border-top-color: transparent;
+  animation: spin 0.8s linear infinite;
+}
+
 .btn {
   padding: 7px 14px;
   border-radius: 7px;

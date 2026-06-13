@@ -1,10 +1,12 @@
 import { randomUUID } from 'crypto'
 import { existsSync, mkdirSync } from 'fs'
 import { basename, join } from 'path'
-import type { Project, ProjectScripts, Workspace } from '../shared/types'
+import type { ChatSession, Project, ProjectScripts, Workspace } from '../shared/types'
 import {
   addProject,
+  addSession,
   addWorkspace,
+  findSession,
   getProject,
   getProjects,
   getSettings,
@@ -12,7 +14,9 @@ import {
   getWorkspaces,
   nextPort,
   removeProject,
+  removeSession,
   removeWorkspace,
+  renameSession,
   updateWorkspaceStatus,
   updateWorkspaceSetupStatus
 } from './store'
@@ -33,6 +37,24 @@ import { buildEnv } from './env'
 import { runTask, startShell, killWorkspace, stopTask } from './ptyManager'
 import { deleteChatHistory, killChat, startChat, stopChatProc } from './claudeChat'
 import { reapWorkspaceProcesses } from './procReaper'
+
+/**
+ * Spawn (idempotently) the Claude chat process for one session of a workspace,
+ * wiring its cwd/env and the persisted resume id + model/effort/permission-mode.
+ * The chat key is the session id.
+ */
+function startSessionChat(ws: Workspace, project: Project, session: ChatSession): void {
+  startChat({
+    id: session.id,
+    cwd: ws.path,
+    env: buildEnv(ws, project),
+    args: getSettings().claudeArgs,
+    resume: session.claudeSessionId,
+    model: session.claudeModel,
+    effort: session.claudeEffort,
+    permissionMode: session.claudePermissionMode
+  })
+}
 
 export function slugify(name: string): string {
   return (
@@ -90,8 +112,10 @@ export async function deleteProject(id: string): Promise<void> {
   const project = getProject(id)
   if (!project) return
   for (const ws of getWorkspaces().filter((w) => w.projectId === id)) {
-    killChat(ws.id)
-    deleteChatHistory(ws.id)
+    for (const s of ws.sessions) {
+      killChat(s.id)
+      deleteChatHistory(s.id)
+    }
     killWorkspace(ws.id)
     // Also kill any detached orphans (test runners, headless Chrome) the tracked
     // PTYs left behind, so they don't keep the worktree dir busy or hold ports.
@@ -210,7 +234,9 @@ export async function createWorkspace(
     createdAt: Date.now(),
     status: 'setting_up',
     // Setup hasn't run yet; finishSetup resolves this to success/error.
-    setupStatus: 'pending'
+    setupStatus: 'pending',
+    // Every workspace starts with one Claude chat session.
+    sessions: [{ id: randomUUID(), createdAt: Date.now() }]
   }
   addWorkspace(ws)
   return ws
@@ -223,7 +249,6 @@ export async function createWorkspace(
  * onChange when the status flips to 'active' so the UI can refresh.
  */
 export async function finishSetup(id: string, onChange: () => void): Promise<void> {
-  const settings = getSettings()
   const ws = getWorkspace(id)
   if (!ws) return
   const project = getProject(ws.projectId)
@@ -234,16 +259,7 @@ export async function finishSetup(id: string, onChange: () => void): Promise<voi
   updateWorkspaceStatus(ws.id, 'active')
   // Reset to pending — matters on restore, where a prior success/error persists.
   updateWorkspaceSetupStatus(ws.id, 'pending')
-  startChat({
-    id: ws.id,
-    cwd: ws.path,
-    env,
-    args: settings.claudeArgs,
-    resume: ws.claudeSessionId,
-    model: ws.claudeModel,
-    effort: ws.claudeEffort,
-    permissionMode: ws.claudePermissionMode
-  })
+  for (const session of ws.sessions) startSessionChat(ws, project, session)
   onChange()
   // Run the setup script alongside the now-live Claude session; its exit code
   // becomes the persisted setup indicator. No script ⇒ nothing to fail.
@@ -271,7 +287,6 @@ export async function finishSetup(id: string, onChange: () => void): Promise<voi
  * memory and are killed on quit, so consoles must be restarted. Idempotent.
  */
 export async function restoreSessions(): Promise<void> {
-  const settings = getSettings()
   for (const ws of getWorkspaces()) {
     if (ws.status === 'archived') continue
     const project = getProject(ws.projectId)
@@ -297,16 +312,7 @@ export async function restoreSessions(): Promise<void> {
     // BEFORE starting Claude (whose env also carries our marker, so it must not be
     // running yet) to guarantee each workspace resumes from a clean slate.
     await reapWorkspaceProcesses(ws.path)
-    startChat({
-      id: ws.id,
-      cwd: ws.path,
-      env: buildEnv(ws, project),
-      args: settings.claudeArgs,
-      resume: ws.claudeSessionId,
-      model: ws.claudeModel,
-      effort: ws.claudeEffort,
-      permissionMode: ws.claudePermissionMode
-    })
+    for (const session of ws.sessions) startSessionChat(ws, project, session)
   }
 }
 
@@ -322,34 +328,57 @@ export async function killWorkspaceProcesses(id: string): Promise<number> {
   const ws = getWorkspace(id)
   if (!ws) return 0
   stopTask(id)
-  // Kill the chat's process but keep its transcript — the session restarts
-  // lazily (resuming the conversation) when the Claude tab is next attached.
-  stopChatProc(id)
+  // Kill each chat session's process but keep its transcript — the session
+  // restarts lazily (resuming the conversation) when its tab is next attached.
+  for (const s of ws.sessions) stopChatProc(s.id)
   killWorkspace(id)
   const reaped = await reapWorkspaceProcesses(ws.path)
   return reaped.length
 }
 
 /**
- * Ensure the structured Claude chat session is running for the workspace
- * (idempotent). Called when the Claude tab attaches or a message is sent, so a
+ * Ensure the structured Claude chat session is running (idempotent). Takes a
+ * *session* id. Called when a Claude tab attaches or a message is sent, so a
  * crashed/killed session restarts lazily, resuming its conversation.
  */
-export function ensureClaudeChat(id: string): void {
-  const ws = getWorkspace(id)
-  if (!ws || ws.status === 'archived' || !existsSync(ws.path)) return
+export function ensureClaudeChat(sessionId: string): void {
+  const found = findSession(sessionId)
+  if (!found) return
+  const { ws, session } = found
+  if (ws.status === 'archived' || !existsSync(ws.path)) return
   const project = getProject(ws.projectId)
   if (!project) return
-  startChat({
-    id: ws.id,
-    cwd: ws.path,
-    env: buildEnv(ws, project),
-    args: getSettings().claudeArgs,
-    resume: ws.claudeSessionId,
-    model: ws.claudeModel,
-    effort: ws.claudeEffort,
-    permissionMode: ws.claudePermissionMode
-  })
+  startSessionChat(ws, project, session)
+}
+
+/**
+ * Add a new Claude chat session to a workspace, start it, and return it. The new
+ * session begins with a fresh conversation and the workspace/global defaults
+ * (no inherited model/effort/permission-mode).
+ */
+export function createChatSession(workspaceId: string): ChatSession | undefined {
+  const ws = getWorkspace(workspaceId)
+  if (!ws || ws.status === 'archived') return undefined
+  const session = addSession(workspaceId)
+  if (session) ensureClaudeChat(session.id)
+  return session
+}
+
+/**
+ * Close a chat session: kill its process, drop its transcript and remove it from
+ * the workspace. Refuses to close the workspace's last remaining session.
+ */
+export function closeChatSession(sessionId: string): void {
+  const found = findSession(sessionId)
+  if (!found || found.ws.sessions.length <= 1) return
+  killChat(sessionId)
+  deleteChatHistory(sessionId)
+  removeSession(sessionId)
+}
+
+/** Rename a chat session (empty title reverts it to the auto "Сесія N" label). */
+export function renameChatSession(sessionId: string, title: string): void {
+  renameSession(sessionId, title)
 }
 
 /**
@@ -413,7 +442,7 @@ export async function finishArchive(id: string, onChange: () => void): Promise<v
         rows: 24
       })
     }
-    killChat(ws.id)
+    for (const s of ws.sessions) killChat(s.id)
     killWorkspace(ws.id)
     // Reap detached orphans before removing the worktree: a background test runner
     // still chdir'd inside it would otherwise survive and keep its DB/port handles.
@@ -473,9 +502,11 @@ export async function deleteArchivedWorkspace(id: string): Promise<void> {
   const ws = getWorkspace(id)
   if (!ws) return
   const project = getProject(ws.projectId)
-  killChat(ws.id)
-  // Permanent delete — the persisted chat history goes with it.
-  deleteChatHistory(ws.id)
+  for (const s of ws.sessions) {
+    killChat(s.id)
+    // Permanent delete — the persisted chat history goes with it.
+    deleteChatHistory(s.id)
+  }
   killWorkspace(ws.id)
   await reapWorkspaceProcesses(ws.path)
   if (project && existsSync(ws.path)) {

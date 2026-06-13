@@ -23,6 +23,8 @@ interface AppState {
   claudeBusyById: Record<string, boolean>
   /** Last-selected tab per workspace id, so switching workspaces keeps the tab. */
   kindById: Record<string, PtyKind>
+  /** Selected Claude session per workspace id (the chat tab strip selection). */
+  activeSessionByWorkspace: Record<string, string>
   /** Pending in-app confirmation (replaces native confirm(), which breaks window focus on Linux). */
   confirmRequest: { message: string; onResolve: (ok: boolean) => void } | null
 
@@ -31,6 +33,7 @@ interface AppState {
   resolveConfirm: (ok: boolean) => void
   setActive: (id: string) => void
   setKind: (kind: PtyKind) => void
+  setActiveSession: (workspaceId: string, sessionId: string) => void
   openSettings: (open: boolean) => void
   openNewProject: (open: boolean) => void
   openNewWorkspace: (projectId: string | null) => void
@@ -76,6 +79,7 @@ export const useStore = create<AppState>((set, get) => ({
   runningById: {},
   claudeBusyById: {},
   kindById: {},
+  activeSessionByWorkspace: {},
   confirmRequest: null,
 
   load: async () => {
@@ -96,6 +100,10 @@ export const useStore = create<AppState>((set, get) => ({
     set((s) => ({
       activeKind: kind,
       kindById: s.activeId ? { ...s.kindById, [s.activeId]: kind } : s.kindById
+    })),
+  setActiveSession: (workspaceId, sessionId) =>
+    set((s) => ({
+      activeSessionByWorkspace: { ...s.activeSessionByWorkspace, [workspaceId]: sessionId }
     })),
   openSettings: (open) => set({ showSettings: open }),
   openNewProject: (open) =>

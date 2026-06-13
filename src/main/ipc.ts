@@ -16,6 +16,8 @@ import { workspaceUrl } from '../shared/workspaceUrl'
 import { attach, resize, stopTask, write } from './ptyManager'
 import {
   beginArchive,
+  closeChatSession,
+  createChatSession,
   createProject,
   createWorkspace,
   deleteArchivedWorkspace,
@@ -26,6 +28,7 @@ import {
   finishSetup,
   killWorkspaceProcesses,
   projectNameFromPath,
+  renameChatSession,
   restoreWorktree,
   runWorkspace
 } from './workspaces'
@@ -158,7 +161,7 @@ export function registerIpc(): void {
     notifyWorkspacesChanged()
   })
 
-  // ---- Claude chat ----
+  // ---- Claude chat ---- (`id` is a session id, the opaque chat key)
   ipcMain.handle('chat:attach', (_e, id: string) => {
     // Restart a crashed/killed session lazily the moment its tab is shown.
     ensureClaudeChat(id)
@@ -170,6 +173,21 @@ export function registerIpc(): void {
   })
   ipcMain.on('chat:answer', (_e, id: string, answer: ChatAnswer) => answerChat(id, answer))
   ipcMain.on('chat:interrupt', (_e, id: string) => interruptChat(id))
+
+  // ---- Chat sessions (create/close/rename within a workspace) ----
+  ipcMain.handle('session:create', (_e, workspaceId: string) => {
+    const session = createChatSession(workspaceId)
+    notifyWorkspacesChanged()
+    return session
+  })
+  ipcMain.handle('session:close', (_e, sessionId: string) => {
+    closeChatSession(sessionId)
+    notifyWorkspacesChanged()
+  })
+  ipcMain.handle('session:rename', (_e, sessionId: string, title: string) => {
+    renameChatSession(sessionId, title)
+    notifyWorkspacesChanged()
+  })
 
   // ---- PTY ----
   ipcMain.handle('pty:attach', (_e, id: string, kind: PtyKind) => {

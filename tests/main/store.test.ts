@@ -12,7 +12,9 @@ vi.mock('electron', () => ({
 
 import {
   addProject,
+  addSession,
   addWorkspace,
+  findSession,
   getProject,
   getProjects,
   getSettings,
@@ -21,11 +23,13 @@ import {
   initStore,
   nextPort,
   removeProject,
+  removeSession,
   removeWorkspace,
+  renameSession,
   setSettings,
   updateProject,
-  updateWorkspaceClaudeParams,
-  updateWorkspaceSessionId,
+  updateSessionClaudeParams,
+  updateSessionSessionId,
   updateWorkspaceStatus
 } from '../../src/main/store'
 
@@ -40,18 +44,23 @@ const mkProject = (over: Partial<Project> = {}): Project => ({
   ...over
 })
 
-const mkWs = (over: Partial<Workspace> = {}): Workspace => ({
-  id: over.id ?? 'id-' + Math.random().toString(36).slice(2),
-  projectId: 'p1',
-  name: 'ws',
-  branch: 'ws',
-  baseBranch: undefined,
-  path: '/wt/proj/ws',
-  port: 3002,
-  createdAt: 0,
-  status: 'active',
-  ...over
-})
+const mkWs = (over: Partial<Workspace> = {}): Workspace => {
+  const id = over.id ?? 'id-' + Math.random().toString(36).slice(2)
+  return {
+    id,
+    projectId: 'p1',
+    name: 'ws',
+    branch: 'ws',
+    baseBranch: undefined,
+    path: '/wt/proj/ws',
+    port: 3002,
+    createdAt: 0,
+    status: 'active',
+    // First session reuses the workspace id, mirroring the migration convention.
+    sessions: [{ id, createdAt: 0 }],
+    ...over
+  }
+}
 
 let tmp: string
 const dataFile = (): string => join(tmp, 'conductor-data.json')
@@ -131,6 +140,49 @@ describe('initStore', () => {
     })
     // The orphan workspace is stamped with the new project id.
     expect(getWorkspaces()[0].projectId).toBe(projects[0].id)
+  })
+
+  it('migrates a pre-sessions workspace: folds its Claude fields into one session keyed by ws id', () => {
+    writeFileSync(
+      dataFile(),
+      JSON.stringify({
+        settings: { startPort: 3002 },
+        projects: [mkProject({ id: 'p1' })],
+        // A workspace from before multi-session support: Claude state on the
+        // workspace, no `sessions` array.
+        workspaces: [
+          {
+            id: 'w1',
+            projectId: 'p1',
+            name: 'ws',
+            branch: 'ws',
+            path: '/wt/ws',
+            port: 3002,
+            createdAt: 7,
+            status: 'active',
+            claudeSessionId: 'sess-legacy',
+            claudeModel: 'sonnet',
+            claudeEffort: 'high',
+            claudePermissionMode: 'plan'
+          }
+        ]
+      })
+    )
+    initStore()
+    const ws = getWorkspace('w1')!
+    expect(ws.sessions).toHaveLength(1)
+    // The session reuses the workspace id so chats/<wsId>.json keeps working.
+    expect(ws.sessions[0]).toMatchObject({
+      id: 'w1',
+      claudeSessionId: 'sess-legacy',
+      claudeModel: 'sonnet',
+      claudeEffort: 'high',
+      claudePermissionMode: 'plan'
+    })
+    // The legacy fields are stripped off the workspace.
+    const raw = ws as unknown as Record<string, unknown>
+    expect(raw.claudeSessionId).toBeUndefined()
+    expect(raw.claudeModel).toBeUndefined()
   })
 
   it('falls back to defaults on corrupt JSON', () => {
@@ -231,36 +283,83 @@ describe('workspace CRUD', () => {
     expect(() => updateWorkspaceStatus('missing', 'archived')).not.toThrow()
   })
 
-  it('updateWorkspaceSessionId sets, clears, persists and ignores unknown/no-op', () => {
+  it('updateSessionSessionId sets, clears, persists and ignores unknown/no-op', () => {
     addWorkspace(mkWs({ id: 'a' }))
-    updateWorkspaceSessionId('a', 'sess-1')
-    expect(getWorkspace('a')?.claudeSessionId).toBe('sess-1')
+    updateSessionSessionId('a', 'sess-1')
+    expect(getWorkspace('a')?.sessions[0].claudeSessionId).toBe('sess-1')
     // Persisted to disk so the chat resumes after a restart.
-    expect(JSON.parse(readFileSync(dataFile(), 'utf8')).workspaces[0].claudeSessionId).toBe('sess-1')
+    expect(
+      JSON.parse(readFileSync(dataFile(), 'utf8')).workspaces[0].sessions[0].claudeSessionId
+    ).toBe('sess-1')
     // Clearing it (e.g. a failed resume) is allowed.
-    updateWorkspaceSessionId('a', undefined)
-    expect(getWorkspace('a')?.claudeSessionId).toBeUndefined()
-    expect(() => updateWorkspaceSessionId('missing', 'x')).not.toThrow()
+    updateSessionSessionId('a', undefined)
+    expect(getWorkspace('a')?.sessions[0].claudeSessionId).toBeUndefined()
+    expect(() => updateSessionSessionId('missing', 'x')).not.toThrow()
   })
 
-  it('updateWorkspaceClaudeParams sets only the given keys, persists, ignores unknown', () => {
+  it('updateSessionClaudeParams sets only the given keys, persists, ignores unknown', () => {
     addWorkspace(mkWs({ id: 'a' }))
-    updateWorkspaceClaudeParams('a', { model: 'sonnet', effort: 'high', permissionMode: 'plan' })
-    expect(getWorkspace('a')).toMatchObject({
+    updateSessionClaudeParams('a', { model: 'sonnet', effort: 'high', permissionMode: 'plan' })
+    expect(getWorkspace('a')?.sessions[0]).toMatchObject({
       claudeModel: 'sonnet',
       claudeEffort: 'high',
       claudePermissionMode: 'plan'
     })
     // Persisted so the /model, /effort, /plan choices survive a relaunch.
-    expect(JSON.parse(readFileSync(dataFile(), 'utf8')).workspaces[0].claudePermissionMode).toBe('plan')
+    expect(
+      JSON.parse(readFileSync(dataFile(), 'utf8')).workspaces[0].sessions[0].claudePermissionMode
+    ).toBe('plan')
     // A partial patch leaves the other fields untouched.
-    updateWorkspaceClaudeParams('a', { permissionMode: 'default' })
-    expect(getWorkspace('a')).toMatchObject({
+    updateSessionClaudeParams('a', { permissionMode: 'default' })
+    expect(getWorkspace('a')?.sessions[0]).toMatchObject({
       claudeModel: 'sonnet',
       claudeEffort: 'high',
       claudePermissionMode: 'default'
     })
-    expect(() => updateWorkspaceClaudeParams('missing', { model: 'x' })).not.toThrow()
+    expect(() => updateSessionClaudeParams('missing', { model: 'x' })).not.toThrow()
+  })
+})
+
+describe('chat sessions', () => {
+  beforeEach(() => initStore())
+
+  it('findSession locates a session and its owning workspace', () => {
+    addWorkspace(mkWs({ id: 'a' }))
+    const found = findSession('a')
+    expect(found?.ws.id).toBe('a')
+    expect(found?.session.id).toBe('a')
+    expect(findSession('missing')).toBeUndefined()
+  })
+
+  it('addSession appends a fresh session and persists it', () => {
+    addWorkspace(mkWs({ id: 'a' }))
+    const session = addSession('a')
+    expect(session).toBeDefined()
+    expect(getWorkspace('a')?.sessions).toHaveLength(2)
+    expect(JSON.parse(readFileSync(dataFile(), 'utf8')).workspaces[0].sessions).toHaveLength(2)
+    // Params/params target the right session via its id.
+    updateSessionClaudeParams(session!.id, { model: 'opus' })
+    expect(findSession(session!.id)?.session.claudeModel).toBe('opus')
+    expect(getWorkspace('a')?.sessions[0].claudeModel).toBeUndefined()
+    expect(addSession('missing')).toBeUndefined()
+  })
+
+  it('removeSession drops a session but refuses the last one', () => {
+    addWorkspace(mkWs({ id: 'a' }))
+    const second = addSession('a')!
+    removeSession(second.id)
+    expect(getWorkspace('a')?.sessions.map((s) => s.id)).toEqual(['a'])
+    // The sole remaining session cannot be removed.
+    removeSession('a')
+    expect(getWorkspace('a')?.sessions).toHaveLength(1)
+  })
+
+  it('renameSession sets and clears the title', () => {
+    addWorkspace(mkWs({ id: 'a' }))
+    renameSession('a', '  refactor  ')
+    expect(getWorkspace('a')?.sessions[0].title).toBe('refactor')
+    renameSession('a', '   ')
+    expect(getWorkspace('a')?.sessions[0].title).toBeUndefined()
   })
 })
 

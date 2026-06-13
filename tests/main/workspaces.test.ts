@@ -38,6 +38,28 @@ const store = vi.hoisted(() => {
       const w = workspaces.find((x) => x.id === id)
       if (w) w.setupStatus = setupStatus
     }),
+    findSession: vi.fn((sessionId: string) => {
+      for (const w of workspaces) {
+        const session = w.sessions?.find((s) => s.id === sessionId)
+        if (session) return { ws: w, session }
+      }
+      return undefined
+    }),
+    addSession: vi.fn((workspaceId: string) => {
+      const w = workspaces.find((x) => x.id === workspaceId)
+      if (!w) return undefined
+      const session = { id: 's-' + (w.sessions.length + 1), createdAt: 0 }
+      w.sessions.push(session)
+      return session
+    }),
+    removeSession: vi.fn((sessionId: string) => {
+      for (const w of workspaces) {
+        if (w.sessions.length > 1 && w.sessions.some((s) => s.id === sessionId)) {
+          w.sessions = w.sessions.filter((s) => s.id !== sessionId)
+        }
+      }
+    }),
+    renameSession: vi.fn(),
     nextPort: vi.fn(() => 3010)
   }
 })
@@ -82,6 +104,8 @@ vi.mock('fs', () => fsm)
 
 import {
   beginArchive,
+  closeChatSession,
+  createChatSession,
   createProject,
   createWorkspace,
   deleteArchivedWorkspace,
@@ -114,18 +138,23 @@ const mkProject = (over: Partial<Project> = {}): Project => ({
   ...over
 })
 
-const mkWs = (over: Partial<Workspace>): Workspace => ({
-  id: 'id',
-  projectId: 'p1',
-  name: 'ws',
-  branch: 'ws',
-  baseBranch: undefined,
-  path: '/wt/proj/ws',
-  port: 3002,
-  createdAt: 0,
-  status: 'active',
-  ...over
-})
+const mkWs = (over: Partial<Workspace>): Workspace => {
+  const id = over.id ?? 'id'
+  return {
+    id,
+    projectId: 'p1',
+    name: 'ws',
+    branch: 'ws',
+    baseBranch: undefined,
+    path: '/wt/proj/ws',
+    port: 3002,
+    createdAt: 0,
+    status: 'active',
+    // First session reuses the workspace id (migration convention) unless overridden.
+    sessions: [{ id, createdAt: 0 }],
+    ...over
+  }
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -345,10 +374,16 @@ describe('finishSetup', () => {
       mkWs({
         id: 'a',
         status: 'setting_up',
-        claudeSessionId: 'sess-9',
-        claudeModel: 'opus[1m]',
-        claudeEffort: 'max',
-        claudePermissionMode: 'plan'
+        sessions: [
+          {
+            id: 'a',
+            createdAt: 0,
+            claudeSessionId: 'sess-9',
+            claudeModel: 'opus[1m]',
+            claudeEffort: 'max',
+            claudePermissionMode: 'plan'
+          }
+        ]
       })
     ])
     await finishSetup('a', vi.fn())
@@ -495,10 +530,16 @@ describe('restoreSessions healing matrix', () => {
         id: 'a',
         status: 'active',
         path: '/wt/proj/a',
-        claudeSessionId: 'sess-1',
-        claudeModel: 'sonnet',
-        claudeEffort: 'high',
-        claudePermissionMode: 'plan'
+        sessions: [
+          {
+            id: 'a',
+            createdAt: 0,
+            claudeSessionId: 'sess-1',
+            claudeModel: 'sonnet',
+            claudeEffort: 'high',
+            claudePermissionMode: 'plan'
+          }
+        ]
       })
     ])
     fsm.existsSync.mockReturnValue(true)
@@ -531,6 +572,48 @@ describe('restoreSessions healing matrix', () => {
     expect(store.updateWorkspaceSetupStatus).toHaveBeenCalledWith('a', 'error')
     // A resolved setup is left untouched.
     expect(store.updateWorkspaceSetupStatus).not.toHaveBeenCalledWith('b', expect.anything())
+  })
+})
+
+describe('chat sessions', () => {
+  it('createChatSession adds a session and starts its chat with the workspace cwd', async () => {
+    store._set({ ...settings }, [mkProject()], [
+      mkWs({ id: 'a', status: 'active', path: '/wt/proj/a' })
+    ])
+    fsm.existsSync.mockReturnValue(true)
+    const session = createChatSession('a')
+    expect(session).toBeDefined()
+    expect(store.getWorkspace('a')?.sessions).toHaveLength(2)
+    // The new session is spawned (ensureClaudeChat → startChat) under its own id.
+    expect(chat.startChat).toHaveBeenCalledWith(
+      expect.objectContaining({ id: session!.id, cwd: '/wt/proj/a' })
+    )
+  })
+
+  it('createChatSession refuses an archived workspace', () => {
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', status: 'archived' })])
+    expect(createChatSession('a')).toBeUndefined()
+    expect(chat.startChat).not.toHaveBeenCalled()
+  })
+
+  it('closeChatSession kills the proc, drops history and removes the session', () => {
+    store._set({ ...settings }, [mkProject()], [
+      mkWs({ id: 'a', status: 'active', sessions: [
+        { id: 'a', createdAt: 0 },
+        { id: 's2', createdAt: 0 }
+      ] })
+    ])
+    closeChatSession('s2')
+    expect(chat.killChat).toHaveBeenCalledWith('s2')
+    expect(chat.deleteChatHistory).toHaveBeenCalledWith('s2')
+    expect(store.getWorkspace('a')?.sessions.map((s) => s.id)).toEqual(['a'])
+  })
+
+  it('closeChatSession refuses to close the last remaining session', () => {
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', status: 'active' })])
+    closeChatSession('a')
+    expect(chat.killChat).not.toHaveBeenCalled()
+    expect(store.getWorkspace('a')?.sessions).toHaveLength(1)
   })
 })
 

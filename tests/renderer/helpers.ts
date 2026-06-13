@@ -21,18 +21,22 @@ export const mkProject = (over: Partial<Project> = {}): Project => ({
   ...over
 })
 
-export const mkWs = (over: Partial<Workspace> = {}): Workspace => ({
-  id: 'id',
-  projectId: 'p1',
-  name: 'ws',
-  branch: 'ws',
-  baseBranch: undefined,
-  path: '/wt/proj/ws',
-  port: 3002,
-  createdAt: 0,
-  status: 'active',
-  ...over
-})
+export const mkWs = (over: Partial<Workspace> = {}): Workspace => {
+  const id = over.id ?? 'id'
+  return {
+    id,
+    projectId: 'p1',
+    name: 'ws',
+    branch: 'ws',
+    baseBranch: undefined,
+    path: '/wt/proj/ws',
+    port: 3002,
+    createdAt: 0,
+    status: 'active',
+    sessions: [{ id, createdAt: 0 }],
+    ...over
+  }
+}
 
 /** A fully-stubbed window.api with sensible default resolutions. */
 export function makeApi() {
@@ -80,6 +84,9 @@ export function makeApi() {
     answerChat: vi.fn(),
     interruptChat: vi.fn(),
     onChatEvent: vi.fn(() => () => {}),
+    createSession: vi.fn(async () => ({ id: 'sess-new', createdAt: 0 })),
+    closeSession: vi.fn(async () => {}),
+    renameSession: vi.fn(async () => {}),
     attachPty: vi.fn(async () => ''),
     sendInput: vi.fn(),
     resizePty: vi.fn(),
@@ -107,7 +114,9 @@ export function resetStore(): void {
     busy: false,
     error: null,
     runningById: {},
+    claudeBusyById: {},
     kindById: {},
+    activeSessionByWorkspace: {},
     confirmRequest: null
   })
 }

@@ -2,6 +2,7 @@ import { clipboard, contextBridge, ipcRenderer } from 'electron'
 import type {
   ChatAnswer,
   ChatEventPayload,
+  ChatSession,
   ChatSnapshot,
   Project,
   ProjectScripts,
@@ -87,6 +88,14 @@ const api = {
     ipcRenderer.on('chat:event', listener)
     return () => ipcRenderer.removeListener('chat:event', listener)
   },
+
+  // Chat sessions (multiple per workspace)
+  createSession: (workspaceId: string): Promise<ChatSession | undefined> =>
+    ipcRenderer.invoke('session:create', workspaceId),
+  closeSession: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke('session:close', sessionId),
+  renameSession: (sessionId: string, title: string): Promise<void> =>
+    ipcRenderer.invoke('session:rename', sessionId, title),
 
   // PTY
   attachPty: (id: string, kind: PtyKind): Promise<string> =>
