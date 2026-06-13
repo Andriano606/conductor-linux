@@ -241,6 +241,18 @@ describe('listBranches (with a remote)', () => {
     expect(existingBranches).toContain('remote-only')
     expect(checkedOut).not.toContain('remote-only')
   })
+
+  it('skips the fetch with { fetch: false } — only refs already on disk show up', async () => {
+    // A branch lands on origin but the local remote-tracking ref doesn't know it
+    // yet (push then drop the local ref it created). With fetch:false the modal's
+    // instant phase can't see it; only the default (fetch:true) re-discovers it.
+    execFileSync('git', ['-C', repo.dir, 'push', '-q', 'origin', 'main:appeared-on-origin'])
+    execFileSync('git', ['-C', repo.dir, 'update-ref', '-d', 'refs/remotes/origin/appeared-on-origin'])
+    const noFetch = await listBranches(repo.dir, { fetch: false })
+    expect(noFetch.existingBranches).not.toContain('appeared-on-origin')
+    const fetched = await listBranches(repo.dir, { fetch: true })
+    expect(fetched.existingBranches).toContain('appeared-on-origin')
+  })
 })
 
 describe('remoteBranchExists', () => {

@@ -25,7 +25,9 @@ describe('NewWorkspaceModal', () => {
   it('loads the project branches on mount and preselects the default', async () => {
     render(<NewWorkspaceModal />)
     await waitFor(() => expect(screen.getByText('dev')).toBeInTheDocument())
-    expect(api.listBranches).toHaveBeenCalledWith('p1')
+    // Two-phase load: an instant local read (no fetch) then a background refresh.
+    expect(api.listBranches).toHaveBeenCalledWith('p1', false)
+    expect(api.listBranches).toHaveBeenCalledWith('p1', true)
     expect(screen.getByText('main')).toBeInTheDocument()
   })
 

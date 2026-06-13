@@ -75,21 +75,26 @@ export async function worktreeAdd(
 
 /**
  * List selectable base branches (local + remote-tracking), most-recently-committed
- * first, and the repo's default branch to preselect. Does a best-effort `git fetch`
- * first so remote branches are fresh; offline/no-remote just falls back to the
- * refs already on disk. `existingBranches` is what the existing-branch flow can
- * check out: local heads plus origin branches with no local counterpart (those
+ * first, and the repo's default branch to preselect. The `git fetch` is opt-in
+ * (`opts.fetch`, on by default): the New-workspace modal first calls with
+ * `fetch: false` to render local refs instantly, then again with `fetch: true`
+ * in the background to refresh remote branches. Offline/no-remote just falls back
+ * to the refs already on disk. `existingBranches` is what the existing-branch flow
+ * can check out: local heads plus origin branches with no local counterpart (those
  * get a local tracking branch of the same name on checkout). `checkedOut` lists
  * branches already checked out in some worktree (incl. the main repo) — git
  * refuses to check those out a second time.
  */
-export async function listBranches(repoPath: string): Promise<{
+export async function listBranches(
+  repoPath: string,
+  opts: { fetch?: boolean } = { fetch: true }
+): Promise<{
   branches: string[]
   existingBranches: string[]
   checkedOut: string[]
   defaultBranch: string
 }> {
-  await fetchQuiet(repoPath)
+  if (opts.fetch) await fetchQuiet(repoPath)
 
   const { stdout } = await run('git', [
     '-C',

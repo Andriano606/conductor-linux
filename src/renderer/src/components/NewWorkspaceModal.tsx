@@ -45,16 +45,24 @@ export function NewWorkspaceModal(): JSX.Element {
   const [base, setBase] = useState('')
   const [search, setSearch] = useState('')
   const [loadingBranches, setLoadingBranches] = useState(true)
+  // Phase 2 (background `git fetch`) is in flight — shows a subtle indicator but
+  // never blocks the list or submit button.
+  const [refreshingBranches, setRefreshingBranches] = useState(false)
   const [branchError, setBranchError] = useState<string | null>(null)
   // When on, no new branch is created — the worktree checks out the selected
   // existing branch and stays on it.
   const [useExisting, setUseExisting] = useState(false)
 
-  // Pull branches dynamically (with a fresh git fetch) when the modal opens.
+  // Two-phase branch load so the modal never blocks:
+  //   1. instant — local + remote-tracking refs already on disk (no fetch), so the
+  //      list and submit button are usable within milliseconds with a valid base;
+  //   2. background — a fresh `git fetch`, then merge the result in (adding any
+  //      newly-fetched branches) without disabling anything.
   useEffect(() => {
     let cancelled = false
+    setRefreshingBranches(true)
     window.api
-      .listBranches(projectId)
+      .listBranches(projectId, false)
       .then(({ branches, existingBranches, checkedOut, defaultBranch }) => {
         if (cancelled) return
         setBranches(branches)
@@ -64,6 +72,27 @@ export function NewWorkspaceModal(): JSX.Element {
       })
       .catch((e: Error) => !cancelled && setBranchError(e.message))
       .finally(() => !cancelled && setLoadingBranches(false))
+
+    // Phase 2: refresh from origin in the background and merge in.
+    window.api
+      .listBranches(projectId, true)
+      .then(({ branches, existingBranches, checkedOut, defaultBranch }) => {
+        if (cancelled) return
+        setBranches(branches)
+        setExistingBranches(existingBranches)
+        setCheckedOut(new Set(checkedOut))
+        // Keep the user's pick if it's still around; only (re)default when unset
+        // or it vanished from the refreshed list.
+        setBase((prev) =>
+          prev && branches.includes(prev) ? prev : defaultBranch || branches[0] || ''
+        )
+        // A successful background fetch supersedes a phase-1 error (e.g. transient).
+        setBranchError(null)
+      })
+      .catch(() => {
+        /* background refresh is best-effort; phase 1 already populated the list */
+      })
+      .finally(() => !cancelled && setRefreshingBranches(false))
     return () => {
       cancelled = true
     }
@@ -171,6 +200,11 @@ export function NewWorkspaceModal(): JSX.Element {
           <label>
             {useExisting ? 'Гілка' : 'Базова гілка'}
             {base ? <span className="branch-current"> · {base}</span> : null}
+            {refreshingBranches && !loadingBranches ? (
+              <span className="branch-refreshing" title="Оновлення списку гілок…">
+                <span className="spinner spinner-inline" />
+              </span>
+            ) : null}
           </label>
           <input
             spellCheck={false}

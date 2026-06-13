@@ -306,10 +306,11 @@ describe('createWorkspace happy path', () => {
     expect(store.addWorkspace).toHaveBeenCalledWith(ws)
   })
 
-  it('refreshes remote-tracking refs before cutting the new branch', async () => {
+  it('does NOT fetch or fast-forward on the create path (moved to finishSetup)', async () => {
+    // The blocking fetch + fast-forward "pull latest" now happen in the
+    // background finishSetup, so the modal closes without an ~8.5s freeze.
     await createWorkspace('p1', 'feature-fresh', 'origin/main')
-    expect(git.fetchQuiet).toHaveBeenCalledWith('/repo')
-    // The new-branch flow does not fast-forward — it cuts straight from the base ref.
+    expect(git.fetchQuiet).not.toHaveBeenCalled()
     expect(git.fastForwardToRemote).not.toHaveBeenCalled()
   })
 
@@ -335,9 +336,9 @@ describe('createWorkspace with an existing branch', () => {
     expect(ws.baseBranch).toBeUndefined()
     expect(git.worktreeAddExisting).toHaveBeenCalledWith('/repo', '/wt/proj/feature-x', 'feature-x')
     expect(git.worktreeAdd).not.toHaveBeenCalled()
-    // The checked-out branch is fast-forwarded to its remote so it isn't stale.
-    expect(git.fetchQuiet).toHaveBeenCalledWith('/repo')
-    expect(git.fastForwardToRemote).toHaveBeenCalledWith('/wt/proj/feature-x', 'feature-x')
+    // The fast-forward "pull latest" moved to finishSetup, so create stays fast.
+    expect(git.fetchQuiet).not.toHaveBeenCalled()
+    expect(git.fastForwardToRemote).not.toHaveBeenCalled()
   })
 
   it('checks out an origin-only branch via a local tracking branch', async () => {
@@ -384,6 +385,20 @@ describe('finishSetup', () => {
     // Setup is reset to pending while it runs, then resolved by the exit code.
     expect(store.updateWorkspaceSetupStatus).toHaveBeenCalledWith('a', 'pending')
     expect(store.updateWorkspaceSetupStatus).toHaveBeenCalledWith('a', 'success')
+  })
+
+  it('pulls latest (fetch + fast-forward) before running the setup script', async () => {
+    store._set({ ...settings }, [mkProject({ setupScript: '/setup.sh' })], [
+      mkWs({ id: 'a', status: 'setting_up', path: '/wt/proj/a', branch: 'feature-x' })
+    ])
+    ptym.runTask.mockResolvedValue(0)
+    await finishSetup('a', vi.fn())
+    expect(git.fetchQuiet).toHaveBeenCalledWith('/repo')
+    expect(git.fastForwardToRemote).toHaveBeenCalledWith('/wt/proj/a', 'feature-x')
+    // The pull happens before the setup script launches.
+    expect(git.fetchQuiet.mock.invocationCallOrder[0]).toBeLessThan(
+      ptym.runTask.mock.invocationCallOrder[0]
+    )
   })
 
   it('reapplies the persisted model/effort/plan mode (e.g. restored from archive)', async () => {
@@ -440,11 +455,16 @@ describe('finishSetup', () => {
     )
     const onChange = vi.fn()
     const pending = finishSetup('a', onChange)
-    // The window must open without waiting for setup: claude + active + notify
-    // have all happened even though the setup task is still running.
+    // The window must open without waiting for setup OR the background pull:
+    // claude + active + notify have all happened synchronously even though the
+    // setup task is still running.
     expect(chat.startChat).toHaveBeenCalled()
     expect(store.updateWorkspaceStatus).toHaveBeenCalledWith('a', 'active')
     expect(onChange).toHaveBeenCalled()
+    // The setup script only launches after the background fetch + fast-forward
+    // "pull latest" (a couple of awaits), so flush microtasks first.
+    await new Promise((r) => setTimeout(r, 0))
+    expect(git.fetchQuiet).toHaveBeenCalledWith('/repo')
     expect(ptym.runTask).toHaveBeenCalled()
     // claude was spawned before the setup task was launched.
     expect(chat.startChat.mock.invocationCallOrder[0]).toBeLessThan(

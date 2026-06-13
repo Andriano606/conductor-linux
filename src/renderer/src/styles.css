@@ -714,6 +714,16 @@ button {
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
+.branch-refreshing {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-left: 7px;
+}
+.spinner-inline {
+  width: 12px;
+  height: 12px;
+  border-width: 1.5px;
+}
 @keyframes spin {
   to {
     transform: rotate(360deg);

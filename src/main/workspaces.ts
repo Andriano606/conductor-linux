@@ -163,10 +163,10 @@ export async function createWorkspace(
     throw new Error('Project path is not a git repository. Check the project settings.')
   }
 
-  // Refresh remote-tracking refs up front so the new branch is cut from the latest
-  // origin state — the modal's fetch may be stale if it sat open. Best effort: a
-  // hung/offline remote just falls back to the refs already on disk.
-  await fetchQuiet(project.repoPath)
+  // No fetch here: it would freeze the modal for up to ~8.5s on submit. The
+  // worktree is cut from the refs already on disk (kept fresh by the modal's
+  // background fetch), and finishSetup does the fetch + fast-forward "pull
+  // latest" in the background after the tabs are already live.
 
   // One field is both the display name and the full branch name (no forced prefix).
   // When checking out an existing branch, that branch name is also the workspace name.
@@ -213,10 +213,8 @@ export async function createWorkspace(
   mkdirSync(baseDir, { recursive: true })
   if (useExistingBranch && existingIsLocal) {
     await worktreeAddExisting(project.repoPath, wtPath, branchName)
-    // The new-branch flow already cuts from a fresh origin ref via `baseBranch`,
-    // but checking out an existing local branch leaves it wherever it was — so
-    // fast-forward it to origin/<branch> to pull in remote commits it's behind.
-    await fastForwardToRemote(wtPath, branchName)
+    // The fast-forward to origin/<branch> now happens in finishSetup's background
+    // "pull latest" step (after a fresh fetch), so it's skipped here.
   } else if (useExistingBranch) {
     // Origin-only: cut the local tracking branch straight from the (just
     // fetched) origin ref — already at the remote tip, nothing to fast-forward.
@@ -345,6 +343,13 @@ export async function finishSetup(id: string, onChange: () => void): Promise<voi
   // Watch HEAD so a manual branch switch/rename in the terminal reflects at once.
   void startWatchingBranch(ws, onChange)
   onChange()
+  // Pull the latest commits for this worktree's branch before setup runs. The UI
+  // is already unblocked here (status active, Claude started, onChange fired), so
+  // this best-effort fetch + fast-forward doesn't freeze the tabs. fastForward is
+  // a no-op when there's no origin/<branch> (a genuine new branch) or on a
+  // non-fast-forward, so it's safe for every create/restore flow.
+  await fetchQuiet(project.repoPath)
+  await fastForwardToRemote(ws.path, ws.branch)
   // Run the setup script alongside the now-live Claude session; its exit code
   // becomes the persisted setup indicator. No script ⇒ nothing to fail.
   if (project.setupScript) {

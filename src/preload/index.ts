@@ -38,13 +38,14 @@ const api = {
   // Workspaces
   listWorkspaces: (): Promise<Workspace[]> => ipcRenderer.invoke('workspaces:list'),
   listBranches: (
-    projectId: string
+    projectId: string,
+    fetch?: boolean
   ): Promise<{
     branches: string[]
     existingBranches: string[]
     checkedOut: string[]
     defaultBranch: string
-  }> => ipcRenderer.invoke('git:branches', projectId),
+  }> => ipcRenderer.invoke('git:branches', projectId, fetch),
   currentBranch: (id: string): Promise<string> => ipcRenderer.invoke('git:currentBranch', id),
   renameBranch: (id: string, newName: string): Promise<{ remoteExists: boolean }> =>
     ipcRenderer.invoke('workspace:renameBranch', id, newName),

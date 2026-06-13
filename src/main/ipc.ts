@@ -54,10 +54,10 @@ export function registerIpc(): void {
   ipcMain.handle('settings:get', () => getSettings())
   ipcMain.handle('settings:set', (_e, settings: Settings) => setSettings(settings))
   ipcMain.handle('settings:isGitRepo', (_e, path: string) => isGitRepo(path))
-  ipcMain.handle('git:branches', (_e, projectId: string) => {
+  ipcMain.handle('git:branches', (_e, projectId: string, fetch?: boolean) => {
     const project = getProject(projectId)
     return project
-      ? listBranches(project.repoPath)
+      ? listBranches(project.repoPath, { fetch })
       : { branches: [], existingBranches: [], checkedOut: [], defaultBranch: '' }
   })
   // Reads the live branch AND reconciles ws.branch with it (the user may have
