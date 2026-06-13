@@ -114,6 +114,7 @@ import {
   finishSetup,
   killWorkspaceProcesses,
   projectNameFromPath,
+  rerunSetup,
   restoreSessions,
   restoreWorktree,
   runWorkspace,
@@ -476,6 +477,56 @@ describe('finishSetup', () => {
     store._set({ ...settings }, [], [mkWs({ id: 'a', status: 'setting_up', projectId: 'gone' })])
     await expect(finishSetup('a', vi.fn())).resolves.toBeUndefined()
     expect(chat.startChat).not.toHaveBeenCalled()
+  })
+})
+
+describe('rerunSetup', () => {
+  it('replays the setup script and re-persists success, without touching status or claude', async () => {
+    store._set({ ...settings }, [mkProject({ setupScript: '/setup.sh' })], [
+      mkWs({ id: 'a', status: 'active', setupStatus: 'error' })
+    ])
+    const onChange = vi.fn()
+    ptym.runTask.mockResolvedValue(0)
+    await rerunSetup('a', onChange)
+    expect(ptym.runTask).toHaveBeenCalledWith(expect.objectContaining({ scriptPath: '/setup.sh' }))
+    expect(store.updateWorkspaceSetupStatus).toHaveBeenCalledWith('a', 'pending')
+    expect(store.updateWorkspaceSetupStatus).toHaveBeenCalledWith('a', 'success')
+    // Re-run replays only the script — status stays put and claude is not restarted.
+    expect(store.updateWorkspaceStatus).not.toHaveBeenCalled()
+    expect(chat.startChat).not.toHaveBeenCalled()
+    expect(onChange).toHaveBeenCalled()
+  })
+
+  it('re-persists error when the script exits non-zero', async () => {
+    store._set({ ...settings }, [mkProject({ setupScript: '/setup.sh' })], [
+      mkWs({ id: 'a', status: 'active', setupStatus: 'error' })
+    ])
+    ptym.runTask.mockResolvedValue(1)
+    await rerunSetup('a', vi.fn())
+    expect(store.updateWorkspaceSetupStatus).toHaveBeenCalledWith('a', 'error')
+    expect(store.updateWorkspaceSetupStatus).not.toHaveBeenCalledWith('a', 'success')
+  })
+
+  it('no-ops when the project has no setup script', async () => {
+    store._set({ ...settings }, [mkProject({ setupScript: '' })], [
+      mkWs({ id: 'a', status: 'active', setupStatus: 'error' })
+    ])
+    await rerunSetup('a', vi.fn())
+    expect(ptym.runTask).not.toHaveBeenCalled()
+    expect(store.updateWorkspaceSetupStatus).not.toHaveBeenCalled()
+  })
+
+  it('no-ops when the workspace is not active', async () => {
+    store._set({ ...settings }, [mkProject({ setupScript: '/setup.sh' })], [
+      mkWs({ id: 'a', status: 'archived' })
+    ])
+    await rerunSetup('a', vi.fn())
+    expect(ptym.runTask).not.toHaveBeenCalled()
+  })
+
+  it('returns without throwing for an unknown id', async () => {
+    await expect(rerunSetup('nope', vi.fn())).resolves.toBeUndefined()
+    expect(ptym.runTask).not.toHaveBeenCalled()
   })
 })
 

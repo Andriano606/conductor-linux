@@ -60,6 +60,7 @@ const api = {
   openInBrowser: (id: string): Promise<void> => ipcRenderer.invoke('workspace:openInBrowser', id),
   openInIde: (id: string): Promise<void> => ipcRenderer.invoke('workspace:openInIde', id),
   archiveWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:archive', id),
+  rerunSetup: (id: string): Promise<void> => ipcRenderer.invoke('workspace:rerunSetup', id),
   restoreWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:restore', id),
   deleteWorkspace: (id: string): Promise<void> => ipcRenderer.invoke('workspace:delete', id),
   onTaskRunning: (cb: (d: { id: string; running: boolean }) => void): (() => void) => {

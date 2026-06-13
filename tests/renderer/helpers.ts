@@ -66,6 +66,7 @@ export function makeApi() {
     openInBrowser: vi.fn(async () => {}),
     openInIde: vi.fn(async () => {}),
     archiveWorkspace: vi.fn(async () => {}),
+    rerunSetup: vi.fn(async () => {}),
     restoreWorkspace: vi.fn(async () => {}),
     deleteWorkspace: vi.fn(async () => {}),
     onTaskRunning: vi.fn(() => () => {}),

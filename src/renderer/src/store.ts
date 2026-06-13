@@ -54,6 +54,7 @@ interface AppState {
   openActiveInBrowser: () => void
   openActiveInIde: () => void
   archiveActive: () => Promise<void>
+  rerunSetup: () => Promise<void>
   restoreWorkspace: (id: string) => Promise<void>
   deleteWorkspace: (id: string) => Promise<void>
   setRunning: (id: string, running: boolean) => void
@@ -225,6 +226,18 @@ export const useStore = create<AppState>((set, get) => ({
     set((s) => ({ error: null, activeKind: 'task', kindById: { ...s.kindById, [id]: 'task' } }))
     try {
       await window.api.archiveWorkspace(id)
+    } catch (e) {
+      set({ error: (e as Error).message })
+    }
+  },
+
+  rerunSetup: async () => {
+    const id = get().activeId
+    if (!id) return
+    // Show the setup output as it replays; status comes back via workspaces:changed.
+    set((s) => ({ error: null, activeKind: 'task', kindById: { ...s.kindById, [id]: 'task' } }))
+    try {
+      await window.api.rerunSetup(id)
     } catch (e) {
       set({ error: (e as Error).message })
     }

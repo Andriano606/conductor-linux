@@ -29,6 +29,7 @@ import {
   killWorkspaceProcesses,
   projectNameFromPath,
   renameChatSession,
+  rerunSetup,
   restoreWorktree,
   runWorkspace
 } from './workspaces'
@@ -146,6 +147,11 @@ export function registerIpc(): void {
     beginArchive(id)
     notifyWorkspacesChanged()
     void finishArchive(id, notifyWorkspacesChanged)
+  })
+
+  ipcMain.handle('workspace:rerunSetup', (_e, id: string) => {
+    // Re-run only the setup script (e.g. after a failure); status/Claude untouched.
+    void rerunSetup(id, notifyWorkspacesChanged)
   })
 
   ipcMain.handle('workspace:restore', async (_e, id: string) => {

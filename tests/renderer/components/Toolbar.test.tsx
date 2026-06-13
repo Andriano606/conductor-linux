@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Toolbar } from '../../../src/renderer/src/components/Toolbar'
 import { useStore } from '../../../src/renderer/src/store'
-import { Api, mkWs, settings, setupRenderer } from '../helpers'
+import { Api, mkProject, mkWs, settings, setupRenderer } from '../helpers'
 
 let api: Api
 beforeEach(() => {
@@ -93,6 +93,32 @@ describe('Toolbar', () => {
   it('switches tabs via setKind', () => {
     render(<Toolbar ws={ws} />)
     fireEvent.click(screen.getByText('Скрипти'))
+    expect(useStore.getState().activeKind).toBe('task')
+  })
+
+  it('shows the retry-setup button only on a failed setup with a setup script', () => {
+    useStore.setState({ projects: [mkProject({ id: 'p1', setupScript: '/setup.sh' })] })
+    const { rerender } = render(<Toolbar ws={ws} />)
+    // No setup error → no button.
+    expect(screen.queryByText('↻ Setup')).not.toBeInTheDocument()
+    rerender(<Toolbar ws={mkWs({ id: 'a', status: 'active', setupStatus: 'error' })} />)
+    expect(screen.getByText('↻ Setup')).toBeInTheDocument()
+  })
+
+  it('hides the retry-setup button when the project has no setup script', () => {
+    useStore.setState({ projects: [mkProject({ id: 'p1', setupScript: '' })] })
+    render(<Toolbar ws={mkWs({ id: 'a', status: 'active', setupStatus: 'error' })} />)
+    expect(screen.queryByText('↻ Setup')).not.toBeInTheDocument()
+  })
+
+  it('re-runs setup and switches to the Scripts tab on click', () => {
+    useStore.setState({
+      activeId: 'a',
+      projects: [mkProject({ id: 'p1', setupScript: '/setup.sh' })]
+    })
+    render(<Toolbar ws={mkWs({ id: 'a', status: 'active', setupStatus: 'error' })} />)
+    fireEvent.click(screen.getByText('↻ Setup'))
+    expect(api.rerunSetup).toHaveBeenCalledWith('a')
     expect(useStore.getState().activeKind).toBe('task')
   })
 

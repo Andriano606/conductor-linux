@@ -28,16 +28,15 @@ export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
     openActiveInBrowser,
     openActiveInIde,
     archiveActive,
+    rerunSetup,
     askConfirm,
     busy,
     runningById,
     settings,
     projects
   } = useStore()
-  const browserUrl = workspaceUrl(
-    projects.find((p) => p.id === ws.projectId)?.browserHost,
-    ws.port
-  )
+  const project = projects.find((p) => p.id === ws.projectId)
+  const browserUrl = workspaceUrl(project?.browserHost, ws.port)
   const ideConfigured = !!settings?.ideCommand
   const settingUp = ws.status === 'setting_up'
   const archiving = ws.status === 'archiving'
@@ -82,6 +81,16 @@ export function Toolbar({ ws }: { ws: Workspace }): JSX.Element {
             title={settingUp ? 'Зачекай завершення setup' : 'Запустити run-скрипт'}
           >
             ▶ Run
+          </button>
+        )}
+        {ws.setupStatus === 'error' && project?.setupScript && (
+          <button
+            className="btn"
+            onClick={() => void rerunSetup()}
+            disabled={archiving || running}
+            title="Перезапустити setup-скрипт"
+          >
+            ↻ Setup
           </button>
         )}
         <button

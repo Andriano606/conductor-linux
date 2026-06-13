@@ -281,6 +281,34 @@ export async function finishSetup(id: string, onChange: () => void): Promise<voi
 }
 
 /**
+ * Re-run only the project's setup script for a live workspace (e.g. after a
+ * failed setup), streaming to the "task" terminal and re-persisting the outcome.
+ * Unlike finishSetup it does NOT touch workspace status or the Claude sessions —
+ * it just replays the script. No-ops if the workspace isn't active or the
+ * project has no setup script.
+ */
+export async function rerunSetup(id: string, onChange: () => void): Promise<void> {
+  const ws = getWorkspace(id)
+  if (!ws || ws.status !== 'active') return
+  const project = getProject(ws.projectId)
+  if (!project?.setupScript) return
+  const env = buildEnv(ws, project)
+  updateWorkspaceSetupStatus(ws.id, 'pending')
+  onChange()
+  const code = await runTask({
+    id: ws.id,
+    scriptPath: project.setupScript,
+    label: 'setup',
+    cwd: ws.path,
+    env,
+    cols: 80,
+    rows: 24
+  })
+  updateWorkspaceSetupStatus(ws.id, code === 0 ? 'success' : 'error')
+  onChange()
+}
+
+/**
  * On app launch: resolve any workspace left in a transient state (the app was
  * closed mid-setup/mid-archive, which otherwise leaves it stuck forever), then
  * re-start the Claude session for every usable workspace. PTYs live only in
