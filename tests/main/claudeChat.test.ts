@@ -434,6 +434,28 @@ describe('slash commands', () => {
     expect(chatEvents().some((p) => p.ev.type === 'commands')).toBe(true)
   })
 
+  it('drops exact duplicates but keeps distinct commands that share a name', () => {
+    startChat(baseOpts)
+    answerInitialize({
+      commands: [
+        { name: 'compact', description: 'Summarize the conversation' },
+        // Two genuinely different /commit variants (e.g. project + plugin) —
+        // both must survive so neither is hidden.
+        { name: 'commit', description: 'Follow project conventions' },
+        { name: 'commit', description: 'Concise message' },
+        // An exact repeat of the first — this one is the real duplicate.
+        { name: 'compact', description: 'Summarize the conversation' }
+      ],
+      models: []
+    })
+    const cmds = attachChat('w1').commands ?? []
+    expect(cmds).toEqual([
+      { name: 'compact', description: 'Summarize the conversation', argumentHint: undefined },
+      { name: 'commit', description: 'Follow project conventions', argumentHint: undefined },
+      { name: 'commit', description: 'Concise message', argumentHint: undefined }
+    ])
+  })
+
   it('falls back to the init event names when initialize is unsupported', () => {
     startChat(baseOpts)
     last().line({
@@ -447,6 +469,17 @@ describe('slash commands', () => {
       { name: 'clear' },
       { name: 'review' }
     ])
+  })
+
+  it('dedupes the init-event fallback names too', () => {
+    startChat(baseOpts)
+    last().line({
+      type: 'system',
+      subtype: 'init',
+      session_id: 's1',
+      slash_commands: ['compact', 'clear', 'compact', 'clear']
+    })
+    expect(attachChat('w1').commands).toEqual([{ name: 'compact' }, { name: 'clear' }])
   })
 
   it('an init with a changed session id (e.g. /clear) drops the transcript', () => {

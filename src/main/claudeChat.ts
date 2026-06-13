@@ -559,9 +559,10 @@ function handleLine(id: string, e: Entry, line: string): void {
         // Bare fallback for the command list — initialize (with descriptions)
         // normally beats this; don't let names-only overwrite it.
         if (!e.commands && Array.isArray(msg.slash_commands)) {
-          e.commands = (msg.slash_commands as unknown[])
-            .filter((c): c is string => typeof c === 'string')
-            .map((name) => ({ name }))
+          const names = (msg.slash_commands as unknown[]).filter(
+            (c): c is string => typeof c === 'string'
+          )
+          e.commands = [...new Set(names)].map((name) => ({ name }))
           emit(id, e, { type: 'commands', commands: e.commands })
         }
       } else if (msg.subtype === 'status') {
@@ -642,7 +643,7 @@ function handleLine(id: string, e: Entry, line: string): void {
  * emulated locally. detectCommandDrift then reports anything that changed.
  */
 function handleInitialize(id: string, e: Entry, r: Record<string, unknown>): void {
-  const cliCommands: ChatCommand[] = Array.isArray(r.commands)
+  const parsed: ChatCommand[] = Array.isArray(r.commands)
     ? (r.commands as Record<string, unknown>[])
         .filter((c) => typeof c.name === 'string' && c.name)
         .map((c) => ({
@@ -651,6 +652,17 @@ function handleInitialize(id: string, e: Entry, r: Record<string, unknown>): voi
           argumentHint: typeof c.argumentHint === 'string' ? c.argumentHint : undefined
         }))
     : []
+  // Collapse only EXACT duplicates (same name AND description AND hint). The CLI
+  // can list the very same command twice when scopes overlap — but two distinct
+  // commands that merely share a name (e.g. a project's two `/commit` variants)
+  // are kept, so neither is hidden.
+  const seen = new Set<string>()
+  const cliCommands = parsed.filter((c) => {
+    const key = `${c.name} ${c.description ?? ''} ${c.argumentHint ?? ''}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
   detectCommandDrift(id, e, cliCommands)
   if (cliCommands.length) {
     e.commands = cliCommands

@@ -260,7 +260,7 @@ export function ChatView({ id }: { id: string }): JSX.Element {
           <div className="chat-slash-menu" role="listbox">
             {slashMatches.map((c, i) => (
               <button
-                key={c.name}
+                key={`${c.name}|${c.description ?? ''}`}
                 type="button"
                 role="option"
                 aria-selected={i === slashCur}
