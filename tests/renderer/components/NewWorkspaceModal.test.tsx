@@ -31,6 +31,19 @@ describe('NewWorkspaceModal', () => {
     expect(screen.getByText('main')).toBeInTheDocument()
   })
 
+  it('seeds the name from the draft when reopened after a failed create', async () => {
+    // Simulate the reopen-on-error path: the store carries the typed name.
+    useStore.setState({
+      projects: [mkProject({ id: 'p1' })],
+      newWorkspaceProjectId: 'p1',
+      newWorkspaceDraftName: 'feature/login',
+      error: 'branch exists'
+    })
+    render(<NewWorkspaceModal />)
+    expect((nameInput() as HTMLInputElement).value).toBe('feature/login')
+    expect(screen.getByText('branch exists')).toBeInTheDocument()
+  })
+
   it('seeds the name with a suggestion not already taken in the project', async () => {
     // Occupy every suggested name except 'sofia' with existing workspaces.
     const taken = ['lisbon', 'porto', 'kyiv', 'oslo', 'tokyo', 'cairo', 'lima', 'dakar', 'hanoi']

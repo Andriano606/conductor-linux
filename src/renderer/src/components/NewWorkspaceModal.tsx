@@ -25,16 +25,19 @@ function pickSuggestion(used: Set<string>): string {
 }
 
 export function NewWorkspaceModal(): JSX.Element {
-  const { projects, workspaces, newWorkspaceProjectId, createWorkspace, openNewWorkspace, busy, error, clearError } =
+  const { projects, workspaces, newWorkspaceProjectId, newWorkspaceDraftName, createWorkspace, openNewWorkspace, busy, error, clearError } =
     useStore()
   const projectId = newWorkspaceProjectId as string
   const project = projects.find((p) => p.id === projectId)
-  // One field: both the workspace name and the full branch name. The initial
-  // suggestion is random but skips names already taken in this project.
-  const [name, setName] = useState(() =>
-    pickSuggestion(
-      new Set(workspaces.filter((w) => w.projectId === projectId).map((w) => w.branch))
-    )
+  // One field: both the workspace name and the full branch name. Preserve the
+  // typed name when the modal reopens after a failed create; otherwise seed a
+  // random suggestion that skips names already taken in this project.
+  const [name, setName] = useState(
+    () =>
+      newWorkspaceDraftName ??
+      pickSuggestion(
+        new Set(workspaces.filter((w) => w.projectId === projectId).map((w) => w.branch))
+      )
   )
 
   const [branches, setBranches] = useState<string[]>([])

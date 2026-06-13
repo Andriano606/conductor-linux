@@ -10,6 +10,12 @@ interface AppState {
   showSettings: boolean
   /** Project id whose New-workspace modal is open (null = closed). */
   newWorkspaceProjectId: string | null
+  /**
+   * Name to seed the New-workspace modal with — set when a create fails so the
+   * modal can reopen with the typed name preserved next to the error. null on a
+   * fresh open.
+   */
+  newWorkspaceDraftName: string | null
   /** Whether the New-project modal is open. */
   showNewProject: boolean
   /** Project id whose settings modal is open (null = closed). */
@@ -72,6 +78,7 @@ export const useStore = create<AppState>((set, get) => ({
   activeKind: 'claude',
   showSettings: false,
   newWorkspaceProjectId: null,
+  newWorkspaceDraftName: null,
   showNewProject: false,
   projectSettingsId: null,
   showArchived: false,
@@ -113,7 +120,7 @@ export const useStore = create<AppState>((set, get) => ({
   openNewWorkspace: (projectId) =>
     set(
       projectId
-        ? { newWorkspaceProjectId: projectId, busy: false, error: null }
+        ? { newWorkspaceProjectId: projectId, busy: false, error: null, newWorkspaceDraftName: null }
         : { newWorkspaceProjectId: null }
     ),
   openProjectSettings: (id) => set({ projectSettingsId: id, error: null }),
@@ -158,20 +165,26 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   createWorkspace: async (projectId, name, baseBranch, useExistingBranch) => {
-    set({ busy: true, error: null })
+    // Close the modal immediately: the worktree checkout, the background pull and
+    // the setup script all run without blocking, so the modal must not hang
+    // waiting on them. On failure it reopens with the typed name + the error.
+    set({ newWorkspaceProjectId: null, busy: false, error: null, newWorkspaceDraftName: null })
     try {
       const ws = await window.api.createWorkspace(projectId, name, baseBranch, useExistingBranch)
       // Show the "Скрипти" tab so the user can watch setup stream in the background.
       set((s) => ({
-        newWorkspaceProjectId: null,
         activeId: ws.id,
         activeKind: 'task',
         kindById: { ...s.kindById, [ws.id]: 'task' }
       }))
     } catch (e) {
-      set({ error: (e as Error).message })
-    } finally {
-      set({ busy: false })
+      // Reopen the modal with the name preserved so the user can fix it (the
+      // common case is a new-branch name that already exists as a git branch).
+      set({
+        newWorkspaceProjectId: projectId,
+        error: (e as Error).message,
+        newWorkspaceDraftName: name
+      })
     }
   },
 

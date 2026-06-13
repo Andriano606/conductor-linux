@@ -12,6 +12,7 @@ const initial = {
   activeKind: 'claude' as const,
   showSettings: false,
   newWorkspaceProjectId: null,
+  newWorkspaceDraftName: null,
   showNewProject: false,
   projectSettingsId: null,
   showArchived: false,
@@ -163,11 +164,33 @@ describe('createWorkspace', () => {
     expect(get().kindById.new).toBe('task')
   })
 
-  it('surfaces the error and clears busy on failure', async () => {
+  it('closes the modal immediately, before the create resolves', async () => {
+    let resolve!: (ws: ReturnType<typeof mkWs>) => void
+    api.createWorkspace.mockReturnValue(new Promise((r) => (resolve = r)))
+    useStore.setState({ newWorkspaceProjectId: 'p1' })
+    const pending = get().createWorkspace('p1', 'feat', 'main')
+    // The modal is already gone even though the worktree checkout is still running.
+    expect(get().newWorkspaceProjectId).toBeNull()
+    expect(get().busy).toBe(false)
+    resolve(mkWs({ id: 'new' }))
+    await pending
+    expect(get().activeId).toBe('new')
+  })
+
+  it('reopens the modal with the name preserved and the error on failure', async () => {
     api.createWorkspace.mockRejectedValue(new Error('branch exists'))
     await get().createWorkspace('p1', 'feat')
     expect(get().error).toBe('branch exists')
     expect(get().busy).toBe(false)
+    // The modal reopens for the same project, seeded with the typed name.
+    expect(get().newWorkspaceProjectId).toBe('p1')
+    expect(get().newWorkspaceDraftName).toBe('feat')
+  })
+
+  it('clears the draft name when opening the modal fresh', () => {
+    useStore.setState({ newWorkspaceDraftName: 'leftover' })
+    get().openNewWorkspace('p1')
+    expect(get().newWorkspaceDraftName).toBeNull()
   })
 })
 

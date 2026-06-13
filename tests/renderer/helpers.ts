@@ -109,6 +109,7 @@ export function resetStore(): void {
     activeKind: 'claude',
     showSettings: false,
     newWorkspaceProjectId: null,
+    newWorkspaceDraftName: null,
     showNewProject: false,
     projectSettingsId: null,
     showArchived: false,
