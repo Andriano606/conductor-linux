@@ -6,6 +6,7 @@ import { promptVarValues, substitutePromptVars } from '@shared/promptVars'
 import { useChatStore } from '../chatStore'
 import { useStore } from '../store'
 import { PromptLibraryModal } from './PromptLibraryModal'
+import { ClaudeProfilesModal } from './ClaudeProfilesModal'
 
 /**
  * The Claude tab: our own chat UI over the structured stream-json session.
@@ -43,6 +44,8 @@ export function ChatView({ id }: { id: string }): JSX.Element {
   const [slashDismissed, setSlashDismissed] = useState(false)
   // Prompt-library modal visibility (local to this chat tab).
   const [libraryOpen, setLibraryOpen] = useState(false)
+  // Claude config-profile modal visibility (local to this chat tab/session).
+  const [profilesOpen, setProfilesOpen] = useState(false)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
@@ -332,6 +335,13 @@ export function ChatView({ id }: { id: string }): JSX.Element {
           >
             📚
           </button>
+          <button
+            className="chat-library"
+            title="Конфігурація Claude (CLAUDE_CONFIG_DIR) для цієї вкладки"
+            onClick={() => setProfilesOpen(true)}
+          >
+            ⚙
+          </button>
           <textarea
             ref={inputRef}
             className="chat-input"
@@ -381,6 +391,9 @@ export function ChatView({ id }: { id: string }): JSX.Element {
             inputRef.current?.focus()
           }}
         />
+      )}
+      {profilesOpen && (
+        <ClaudeProfilesModal sessionId={id} onClose={() => setProfilesOpen(false)} />
       )}
     </div>
   )

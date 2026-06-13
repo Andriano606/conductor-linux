@@ -7,6 +7,7 @@ const store = vi.hoisted(() => {
   let settings: Settings
   let projects: Project[] = []
   let workspaces: Workspace[] = []
+  let profiles: { id: string; name: string; path: string; createdAt: number }[] = []
   return {
     _set(s: Settings, ps: Project[], ws: Workspace[]) {
       settings = s
@@ -64,7 +65,17 @@ const store = vi.hoisted(() => {
       }
     }),
     renameSession: vi.fn(),
-    nextPort: vi.fn(() => 3010)
+    updateSessionClaudeParams: vi.fn((sessionId: string, patch: { profileId?: string }) => {
+      for (const w of workspaces) {
+        const s = w.sessions?.find((x) => x.id === sessionId)
+        if (s && 'profileId' in patch) s.claudeConfigProfileId = patch.profileId
+      }
+    }),
+    getClaudeProfiles: vi.fn(() => profiles),
+    nextPort: vi.fn(() => 3010),
+    _setProfiles(ps: { id: string; name: string; path: string; createdAt: number }[]) {
+      profiles = ps
+    }
   }
 })
 vi.mock('../../src/main/store', () => store)
@@ -106,7 +117,8 @@ const chat = vi.hoisted(() => ({
   startChat: vi.fn(),
   killChat: vi.fn(),
   stopChatProc: vi.fn(),
-  deleteChatHistory: vi.fn()
+  deleteChatHistory: vi.fn(),
+  setChatConfigDir: vi.fn()
 }))
 vi.mock('../../src/main/claudeChat', () => chat)
 
@@ -133,6 +145,7 @@ import {
   restoreSessions,
   restoreWorktree,
   runWorkspace,
+  setSessionProfile,
   slugify,
   syncWorkspaceBranch
 } from '../../src/main/workspaces'
@@ -432,6 +445,36 @@ describe('finishSetup', () => {
     )
   })
 
+  it('resolves the session config profile to its CLAUDE_CONFIG_DIR path on start', async () => {
+    // A session bound to a profile id must come back up under that profile's
+    // directory (e.g. after archive→restore or an app relaunch).
+    store._setProfiles([{ id: 'pr1', name: 'work', path: '/home/u/.claude-work', createdAt: 0 }])
+    store._set({ ...settings }, [mkProject()], [
+      mkWs({
+        id: 'a',
+        status: 'setting_up',
+        sessions: [{ id: 'a', createdAt: 0, claudeConfigProfileId: 'pr1' }]
+      })
+    ])
+    await finishSetup('a', vi.fn())
+    expect(chat.startChat).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'a', configDir: '/home/u/.claude-work' })
+    )
+  })
+
+  it('passes no configDir when the session has no (or a dangling) profile', async () => {
+    store._setProfiles([])
+    store._set({ ...settings }, [mkProject()], [
+      mkWs({
+        id: 'a',
+        status: 'setting_up',
+        sessions: [{ id: 'a', createdAt: 0, claudeConfigProfileId: 'gone' }]
+      })
+    ])
+    await finishSetup('a', vi.fn())
+    expect(chat.startChat).toHaveBeenCalledWith(expect.objectContaining({ configDir: undefined }))
+  })
+
   it('marks setup as error when the setup script exits non-zero', async () => {
     store._set({ ...settings }, [mkProject({ setupScript: '/setup.sh' })], [
       mkWs({ id: 'a', status: 'setting_up' })
@@ -703,6 +746,25 @@ describe('chat sessions', () => {
     closeChatSession('a')
     expect(chat.killChat).not.toHaveBeenCalled()
     expect(store.getWorkspace('a')?.sessions).toHaveLength(1)
+  })
+
+  it('setSessionProfile persists the profile id and restarts under its path + name', () => {
+    store._setProfiles([{ id: 'pr1', name: 'work', path: '/home/u/.claude-work', createdAt: 0 }])
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', status: 'active' })])
+    setSessionProfile('a', 'pr1')
+    expect(store.updateSessionClaudeParams).toHaveBeenCalledWith('a', { profileId: 'pr1' })
+    expect(store.getWorkspace('a')?.sessions[0].claudeConfigProfileId).toBe('pr1')
+    expect(chat.setChatConfigDir).toHaveBeenCalledWith('a', '/home/u/.claude-work', 'work')
+  })
+
+  it('setSessionProfile with undefined clears the profile and reverts to default', () => {
+    store._setProfiles([])
+    store._set({ ...settings }, [mkProject()], [
+      mkWs({ id: 'a', status: 'active', sessions: [{ id: 'a', createdAt: 0, claudeConfigProfileId: 'pr1' }] })
+    ])
+    setSessionProfile('a', undefined)
+    expect(store.updateSessionClaudeParams).toHaveBeenCalledWith('a', { profileId: undefined })
+    expect(chat.setChatConfigDir).toHaveBeenCalledWith('a', undefined, 'стандартний ~/.claude')
   })
 })
 

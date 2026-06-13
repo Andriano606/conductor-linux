@@ -117,6 +117,20 @@ describe('startChat', () => {
     startChat({ ...baseOpts, resume: 'sess-1' })
     expect((spawnArgs[0] as [string, string[]])[1][1]).toContain('--resume sess-1')
   })
+
+  it('exports CLAUDE_CONFIG_DIR into the spawn env only when a configDir is set', () => {
+    startChat({ ...baseOpts, configDir: '/home/u/.claude-work' })
+    const opts = (spawnArgs[0] as [string, string[], { env: NodeJS.ProcessEnv }])[2]
+    expect(opts.env.CLAUDE_CONFIG_DIR).toBe('/home/u/.claude-work')
+    // Inherited vars are preserved alongside the override.
+    expect(opts.env.PATH).toBe('/usr/bin')
+  })
+
+  it('does not set CLAUDE_CONFIG_DIR when no configDir is given', () => {
+    startChat(baseOpts)
+    const opts = (spawnArgs[0] as [string, string[], { env: NodeJS.ProcessEnv }])[2]
+    expect(opts.env.CLAUDE_CONFIG_DIR).toBeUndefined()
+  })
 })
 
 describe('sending messages', () => {

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type {
+  ClaudeProfile,
   CustomPrompt,
   Project,
   ProjectScripts,
@@ -14,6 +15,8 @@ interface AppState {
   workspaces: Workspace[]
   /** Global prompt library, kept in sync via onCustomPromptsChanged. */
   customPrompts: CustomPrompt[]
+  /** Named CLAUDE_CONFIG_DIR profiles, kept in sync via onClaudeProfilesChanged. */
+  claudeProfiles: ClaudeProfile[]
   activeId: string | null
   activeKind: PtyKind
   showSettings: boolean
@@ -80,6 +83,11 @@ interface AppState {
   createCustomPrompt: (title: string, content: string) => Promise<void>
   updateCustomPrompt: (prompt: CustomPrompt) => Promise<void>
   deleteCustomPrompt: (id: string) => Promise<void>
+  setClaudeProfiles: (profiles: ClaudeProfile[]) => void
+  createClaudeProfile: (name: string, path: string) => Promise<void>
+  updateClaudeProfile: (profile: ClaudeProfile) => Promise<void>
+  deleteClaudeProfile: (id: string) => Promise<void>
+  setSessionProfile: (sessionId: string, profileId: string | undefined) => Promise<void>
   clearError: () => void
 }
 
@@ -88,6 +96,7 @@ export const useStore = create<AppState>((set, get) => ({
   projects: [],
   workspaces: [],
   customPrompts: [],
+  claudeProfiles: [],
   activeId: null,
   activeKind: 'claude',
   showSettings: false,
@@ -105,13 +114,14 @@ export const useStore = create<AppState>((set, get) => ({
   confirmRequest: null,
 
   load: async () => {
-    const [settings, projects, workspaces, customPrompts] = await Promise.all([
+    const [settings, projects, workspaces, customPrompts, claudeProfiles] = await Promise.all([
       window.api.getSettings(),
       window.api.listProjects(),
       window.api.listWorkspaces(),
-      window.api.listCustomPrompts()
+      window.api.listCustomPrompts(),
+      window.api.listClaudeProfiles()
     ])
-    set({ settings, projects, workspaces, customPrompts })
+    set({ settings, projects, workspaces, customPrompts, claudeProfiles })
     const live = workspaces.filter((w) => w.status !== 'archived')
     if (!get().activeId && live.length > 0) set({ activeId: live[0].id })
   },
@@ -330,6 +340,43 @@ export const useStore = create<AppState>((set, get) => ({
     set({ error: null })
     try {
       await window.api.deleteCustomPrompt(id)
+    } catch (e) {
+      set({ error: (e as Error).message })
+    }
+  },
+
+  // Claude config-profile CRUD: the wrappers only call into main — the list
+  // refreshes through the onClaudeProfilesChanged subscription, and a session's
+  // profile change refreshes via onWorkspacesChanged.
+  setClaudeProfiles: (profiles) => set({ claudeProfiles: profiles }),
+  createClaudeProfile: async (name, path) => {
+    set({ error: null })
+    try {
+      await window.api.createClaudeProfile(name, path)
+    } catch (e) {
+      set({ error: (e as Error).message })
+    }
+  },
+  updateClaudeProfile: async (profile) => {
+    set({ error: null })
+    try {
+      await window.api.updateClaudeProfile(profile)
+    } catch (e) {
+      set({ error: (e as Error).message })
+    }
+  },
+  deleteClaudeProfile: async (id) => {
+    set({ error: null })
+    try {
+      await window.api.deleteClaudeProfile(id)
+    } catch (e) {
+      set({ error: (e as Error).message })
+    }
+  },
+  setSessionProfile: async (sessionId, profileId) => {
+    set({ error: null })
+    try {
+      await window.api.setSessionProfile(sessionId, profileId)
     } catch (e) {
       set({ error: (e as Error).message })
     }

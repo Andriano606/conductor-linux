@@ -29,6 +29,7 @@ export function App(): JSX.Element {
     setProjects,
     setWorkspaces,
     setCustomPrompts,
+    setClaudeProfiles,
     setRunning,
     setClaudeBusy
   } = useStore()
@@ -42,6 +43,7 @@ export function App(): JSX.Element {
     const offBusy = window.api.onClaudeBusy(({ id, busy }) => setClaudeBusy(id, busy))
     const offProjects = window.api.onProjectsChanged((next) => setProjects(next))
     const offPrompts = window.api.onCustomPromptsChanged((next) => setCustomPrompts(next))
+    const offProfiles = window.api.onClaudeProfilesChanged((next) => setClaudeProfiles(next))
     const offChanged = window.api.onWorkspacesChanged((next) => {
       const state = useStore.getState()
       const prev = state.workspaces
@@ -72,6 +74,7 @@ export function App(): JSX.Element {
       offBusy()
       offProjects()
       offPrompts()
+      offProfiles()
       offChanged()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

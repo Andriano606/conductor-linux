@@ -1,5 +1,12 @@
 import { vi } from 'vitest'
-import type { ChatSnapshot, CustomPrompt, Project, Settings, Workspace } from '../../src/shared/types'
+import type {
+  ChatSnapshot,
+  ClaudeProfile,
+  CustomPrompt,
+  Project,
+  Settings,
+  Workspace
+} from '../../src/shared/types'
 import { useStore } from '../../src/renderer/src/store'
 import { useChatStore } from '../../src/renderer/src/chatStore'
 
@@ -47,6 +54,7 @@ export function makeApi() {
     copyText: vi.fn(),
     pickFile: vi.fn(async () => null),
     pickDir: vi.fn(async () => null),
+    homeDir: vi.fn(async () => '/home/u'),
     listProjects: vi.fn(async () => [] as Project[]),
     createProject: vi.fn(async () => mkProject({ id: 'new' })),
     updateProject: vi.fn(async (p: Project) => p),
@@ -63,6 +71,17 @@ export function makeApi() {
     updateCustomPrompt: vi.fn(async (p: CustomPrompt) => p),
     deleteCustomPrompt: vi.fn(async () => {}),
     onCustomPromptsChanged: vi.fn(() => () => {}),
+    listClaudeProfiles: vi.fn(async () => [] as ClaudeProfile[]),
+    createClaudeProfile: vi.fn(async (name: string, path: string) => ({
+      id: 'pr-new',
+      name,
+      path,
+      createdAt: 0
+    })),
+    updateClaudeProfile: vi.fn(async (p: ClaudeProfile) => p),
+    deleteClaudeProfile: vi.fn(async () => {}),
+    onClaudeProfilesChanged: vi.fn(() => () => {}),
+    setSessionProfile: vi.fn(async () => {}),
     listWorkspaces: vi.fn(async () => [] as Workspace[]),
     listBranches: vi.fn(async () => ({
       branches: ['main'],
@@ -117,6 +136,7 @@ export function resetStore(): void {
     projects: [],
     workspaces: [],
     customPrompts: [],
+    claudeProfiles: [],
     activeId: null,
     activeKind: 'claude',
     showSettings: false,

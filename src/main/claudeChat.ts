@@ -105,6 +105,8 @@ export interface StartOpts {
   model?: string
   effort?: string
   permissionMode?: string
+  /** CLAUDE_CONFIG_DIR for this session (a named profile); unset ⇒ default. */
+  configDir?: string
 }
 
 /** Patch persisted by the local /model, /effort, /plan commands. */
@@ -562,6 +564,21 @@ function restartSession(id: string, e: Entry): void {
 }
 
 /**
+ * Apply a config profile (CLAUDE_CONFIG_DIR) to a running session: the var only
+ * takes effect at process start, so restart resuming the conversation. Persistence
+ * of the chosen profile id is done by the caller (setSessionProfile in workspaces).
+ * No-op for an idle/unstarted session — its next spawn picks the dir up from opts.
+ */
+export function setChatConfigDir(id: string, configDir: string | undefined, label?: string): void {
+  const e = entries.get(id)
+  if (!e || !e.opts || e.opts.configDir === configDir) return
+  e.opts = { ...e.opts, configDir }
+  const name = label ?? (configDir ? configDir : 'стандартний ~/.claude')
+  info(id, e, `Профіль Claude: ${name}. Перезапускаю сесію — розмова збережеться.`)
+  restartSession(id, e)
+}
+
+/**
  * Intercept a typed `/command` that the app owns (in e.localCommandNames).
  * Returns true when handled (so it is NOT forwarded to the CLI). With a value
  * it applies directly; without one it opens the option picker. A CLI command of
@@ -641,9 +658,12 @@ function spawnProc(id: string, e: Entry, opts: StartOpts): void {
   // Login shell so `claude` resolves from the user's PATH (e.g. ~/.local/bin);
   // detached gives it its own process group so killing -pid takes the whole
   // tree (claude's own bash tools etc.) down with it.
+  // A session attached to a config profile overrides CLAUDE_CONFIG_DIR so its
+  // claude runs under that profile's settings/account; otherwise inherit.
+  const env = opts.configDir ? { ...opts.env, CLAUDE_CONFIG_DIR: opts.configDir } : opts.env
   const proc = spawn('/bin/bash', ['-lc', buildCommand(opts)], {
     cwd: opts.cwd,
-    env: opts.env,
+    env,
     detached: true,
     stdio: ['pipe', 'pipe', 'pipe']
   })

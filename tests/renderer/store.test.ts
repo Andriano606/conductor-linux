@@ -185,6 +185,35 @@ describe('custom prompts', () => {
   })
 })
 
+describe('claude config profiles', () => {
+  it('createClaudeProfile forwards name + path to the api', async () => {
+    await get().createClaudeProfile('work', '/home/u/.claude-work')
+    expect(api.createClaudeProfile).toHaveBeenCalledWith('work', '/home/u/.claude-work')
+    expect(get().error).toBeNull()
+  })
+
+  it('updateClaudeProfile and deleteClaudeProfile forward to the api', async () => {
+    const p = { id: 'a', name: 'n', path: '/p', createdAt: 0 }
+    await get().updateClaudeProfile(p)
+    expect(api.updateClaudeProfile).toHaveBeenCalledWith(p)
+    await get().deleteClaudeProfile('a')
+    expect(api.deleteClaudeProfile).toHaveBeenCalledWith('a')
+  })
+
+  it('setSessionProfile forwards the session + profile id (undefined clears it)', async () => {
+    await get().setSessionProfile('sess1', 'pr1')
+    expect(api.setSessionProfile).toHaveBeenCalledWith('sess1', 'pr1')
+    await get().setSessionProfile('sess1', undefined)
+    expect(api.setSessionProfile).toHaveBeenCalledWith('sess1', undefined)
+  })
+
+  it('surfaces the error when a profile mutation fails', async () => {
+    api.createClaudeProfile.mockRejectedValue(new Error('bad path'))
+    await get().createClaudeProfile('x', '/y')
+    expect(get().error).toBe('bad path')
+  })
+})
+
 describe('createWorkspace', () => {
   it('switches to the task tab and activates the new workspace on success', async () => {
     api.createWorkspace.mockResolvedValue(mkWs({ id: 'new' }))

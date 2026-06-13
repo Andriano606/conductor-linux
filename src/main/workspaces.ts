@@ -7,6 +7,7 @@ import {
   addSession,
   addWorkspace,
   findSession,
+  getClaudeProfiles,
   getProject,
   getProjects,
   getSettings,
@@ -17,6 +18,7 @@ import {
   removeSession,
   removeWorkspace,
   renameSession,
+  updateSessionClaudeParams,
   updateWorkspaceBranch,
   updateWorkspaceStatus,
   updateWorkspaceSetupStatus
@@ -40,7 +42,13 @@ import {
 import { startBranchWatch, stopBranchWatch } from './branchWatcher'
 import { buildEnv } from './env'
 import { runTask, startShell, killWorkspace, stopTask } from './ptyManager'
-import { deleteChatHistory, killChat, startChat, stopChatProc } from './claudeChat'
+import {
+  deleteChatHistory,
+  killChat,
+  setChatConfigDir,
+  startChat,
+  stopChatProc
+} from './claudeChat'
 import { reapWorkspaceProcesses } from './procReaper'
 
 /**
@@ -49,6 +57,11 @@ import { reapWorkspaceProcesses } from './procReaper'
  * The chat key is the session id.
  */
 function startSessionChat(ws: Workspace, project: Project, session: ChatSession): void {
+  // Resolve the session's config profile (if any) to its directory; a dangling
+  // id (profile deleted) simply falls back to the default ~/.claude.
+  const profile = session.claudeConfigProfileId
+    ? getClaudeProfiles().find((p) => p.id === session.claudeConfigProfileId)
+    : undefined
   startChat({
     id: session.id,
     cwd: ws.path,
@@ -57,8 +70,22 @@ function startSessionChat(ws: Workspace, project: Project, session: ChatSession)
     resume: session.claudeSessionId,
     model: session.claudeModel,
     effort: session.claudeEffort,
-    permissionMode: session.claudePermissionMode
+    permissionMode: session.claudePermissionMode,
+    configDir: profile?.path
   })
+}
+
+/**
+ * Attach (or clear) a config profile on a session: persist the chosen profile id
+ * and, if the session is running, restart it under the new CLAUDE_CONFIG_DIR
+ * (resuming the conversation). Pass profileId = undefined to revert to default.
+ */
+export function setSessionProfile(sessionId: string, profileId: string | undefined): void {
+  const found = findSession(sessionId)
+  if (!found) return
+  updateSessionClaudeParams(sessionId, { profileId })
+  const profile = profileId ? getClaudeProfiles().find((p) => p.id === profileId) : undefined
+  setChatConfigDir(sessionId, profile?.path, profile?.name ?? 'стандартний ~/.claude')
 }
 
 export function slugify(name: string): string {

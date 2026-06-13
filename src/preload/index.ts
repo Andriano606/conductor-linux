@@ -4,6 +4,7 @@ import type {
   ChatEventPayload,
   ChatSession,
   ChatSnapshot,
+  ClaudeProfile,
   CustomPrompt,
   Project,
   ProjectScripts,
@@ -21,7 +22,9 @@ const api = {
   isGitRepo: (path: string): Promise<boolean> => ipcRenderer.invoke('settings:isGitRepo', path),
   copyText: (text: string): void => clipboard.writeText(text),
   pickFile: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickFile'),
-  pickDir: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickDir'),
+  pickDir: (defaultPath?: string): Promise<string | null> =>
+    ipcRenderer.invoke('dialog:pickDir', defaultPath),
+  homeDir: (): Promise<string> => ipcRenderer.invoke('sys:homeDir'),
 
   // Projects
   listProjects: (): Promise<Project[]> => ipcRenderer.invoke('projects:list'),
@@ -47,6 +50,19 @@ const api = {
     const listener = (_e: unknown, prompts: CustomPrompt[]): void => cb(prompts)
     ipcRenderer.on('customPrompts:changed', listener)
     return () => ipcRenderer.removeListener('customPrompts:changed', listener)
+  },
+
+  // Claude config profiles (named CLAUDE_CONFIG_DIR list)
+  listClaudeProfiles: (): Promise<ClaudeProfile[]> => ipcRenderer.invoke('claudeProfiles:list'),
+  createClaudeProfile: (name: string, path: string): Promise<ClaudeProfile> =>
+    ipcRenderer.invoke('claudeProfile:create', name, path),
+  updateClaudeProfile: (profile: ClaudeProfile): Promise<ClaudeProfile | undefined> =>
+    ipcRenderer.invoke('claudeProfile:update', profile),
+  deleteClaudeProfile: (id: string): Promise<void> => ipcRenderer.invoke('claudeProfile:delete', id),
+  onClaudeProfilesChanged: (cb: (profiles: ClaudeProfile[]) => void): (() => void) => {
+    const listener = (_e: unknown, profiles: ClaudeProfile[]): void => cb(profiles)
+    ipcRenderer.on('claudeProfiles:changed', listener)
+    return () => ipcRenderer.removeListener('claudeProfiles:changed', listener)
   },
 
   // Workspaces
@@ -114,6 +130,8 @@ const api = {
     ipcRenderer.invoke('session:close', sessionId),
   renameSession: (sessionId: string, title: string): Promise<void> =>
     ipcRenderer.invoke('session:rename', sessionId, title),
+  setSessionProfile: (sessionId: string, profileId: string | undefined): Promise<void> =>
+    ipcRenderer.invoke('session:setProfile', sessionId, profileId),
 
   // PTY
   attachPty: (id: string, kind: PtyKind): Promise<string> =>

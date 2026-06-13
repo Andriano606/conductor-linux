@@ -1,9 +1,10 @@
 import { spawn } from 'child_process'
 import { randomUUID } from 'crypto'
-import { BrowserWindow, Menu, clipboard, dialog, ipcMain, shell } from 'electron'
+import { BrowserWindow, Menu, app, clipboard, dialog, ipcMain, shell } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
 import type {
   ChatAnswer,
+  ClaudeProfile,
   CustomPrompt,
   Project,
   ProjectScripts,
@@ -11,15 +12,19 @@ import type {
   Settings
 } from '../shared/types'
 import {
+  addClaudeProfile,
   addCustomPrompt,
+  getClaudeProfiles,
   getCustomPrompts,
   getProject,
   getProjects,
   getSettings,
   getWorkspace,
   getWorkspaces,
+  removeClaudeProfile,
   removeCustomPrompt,
   setSettings,
+  updateClaudeProfile,
   updateCustomPrompt,
   updateProject
 } from './store'
@@ -45,6 +50,7 @@ import {
   rerunSetup,
   restoreWorktree,
   runWorkspace,
+  setSessionProfile,
   syncWorkspaceBranch
 } from './workspaces'
 import { answerChat, attachChat, interruptChat, sendChatMessage } from './claudeChat'
@@ -64,6 +70,12 @@ function notifyProjectsChanged(): void {
 function notifyCustomPromptsChanged(): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send('customPrompts:changed', getCustomPrompts())
+  }
+}
+
+function notifyClaudeProfilesChanged(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('claudeProfiles:changed', getClaudeProfiles())
   }
 }
 
@@ -91,13 +103,22 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('dialog:pickFile', async () => {
-    const res = await dialog.showOpenDialog({ properties: ['openFile'] })
+    // showHiddenFiles: dotfiles are hidden by default in the GTK chooser, but
+    // config lives in dotfiles/dirs (e.g. ~/.claude), so reveal them.
+    const res = await dialog.showOpenDialog({ properties: ['openFile', 'showHiddenFiles'] })
     return res.canceled ? null : res.filePaths[0]
   })
-  ipcMain.handle('dialog:pickDir', async () => {
-    const res = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
+  ipcMain.handle('dialog:pickDir', async (_e, defaultPath?: string) => {
+    // defaultPath: opening the dialog *inside* a path reveals it even when it's
+    // hidden — the GNOME portal chooser ignores showHiddenFiles, so this is how
+    // a dotfile dir (e.g. ~/.claude) becomes selectable.
+    const res = await dialog.showOpenDialog({
+      properties: ['openDirectory', 'createDirectory', 'showHiddenFiles'],
+      ...(defaultPath ? { defaultPath } : {})
+    })
     return res.canceled ? null : res.filePaths[0]
   })
+  ipcMain.handle('sys:homeDir', () => app.getPath('home'))
 
   // ---- Projects ----
   ipcMain.handle('projects:list', () => getProjects())
@@ -135,6 +156,24 @@ export function registerIpc(): void {
   ipcMain.handle('customPrompt:delete', (_e, id: string) => {
     removeCustomPrompt(id)
     notifyCustomPromptsChanged()
+  })
+
+  // ---- Claude config profiles (named CLAUDE_CONFIG_DIR list) ----
+  ipcMain.handle('claudeProfiles:list', () => getClaudeProfiles())
+  ipcMain.handle('claudeProfile:create', (_e, name: string, path: string) => {
+    const profile: ClaudeProfile = { id: randomUUID(), name, path, createdAt: Date.now() }
+    addClaudeProfile(profile)
+    notifyClaudeProfilesChanged()
+    return profile
+  })
+  ipcMain.handle('claudeProfile:update', (_e, profile: ClaudeProfile) => {
+    const saved = updateClaudeProfile(profile)
+    if (saved) notifyClaudeProfilesChanged()
+    return saved
+  })
+  ipcMain.handle('claudeProfile:delete', (_e, id: string) => {
+    removeClaudeProfile(id)
+    notifyClaudeProfilesChanged()
   })
 
   // ---- Workspaces ----
@@ -244,6 +283,10 @@ export function registerIpc(): void {
   })
   ipcMain.handle('session:rename', (_e, sessionId: string, title: string) => {
     renameChatSession(sessionId, title)
+    notifyWorkspacesChanged()
+  })
+  ipcMain.handle('session:setProfile', (_e, sessionId: string, profileId: string | undefined) => {
+    setSessionProfile(sessionId, profileId)
     notifyWorkspacesChanged()
   })
 

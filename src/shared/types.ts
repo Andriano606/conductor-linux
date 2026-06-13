@@ -56,6 +56,21 @@ export interface CustomPrompt {
   updatedAt: number
 }
 
+/**
+ * A named Claude configuration directory (a `CLAUDE_CONFIG_DIR`). Stored in a
+ * global list; a session can be attached to one so its `claude` process runs
+ * under that config (account/settings/MCP). `path` is an existing directory the
+ * user picks.
+ */
+export interface ClaudeProfile {
+  id: string
+  /** Short display label shown in the picker. */
+  name: string
+  /** Absolute path to an existing directory used as CLAUDE_CONFIG_DIR. */
+  path: string
+  createdAt: number
+}
+
 /** The project fields supplied at create time or edited later. */
 export interface ProjectScripts {
   setupScript?: string
@@ -99,6 +114,12 @@ export interface ChatSession {
   claudeModel?: string
   claudeEffort?: string
   claudePermissionMode?: string
+  /**
+   * Id of the ClaudeProfile this session runs under (a named CLAUDE_CONFIG_DIR).
+   * Unset ⇒ the default ~/.claude. Resolved to a path on (re)spawn and exported
+   * as CLAUDE_CONFIG_DIR into this session's claude process.
+   */
+  claudeConfigProfileId?: string
 }
 
 export interface Workspace {

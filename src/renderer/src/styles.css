@@ -1269,6 +1269,49 @@ button {
   border-color: var(--accent);
 }
 
+/* Claude config-profile picker (per-session CLAUDE_CONFIG_DIR selection). */
+.profile-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.profile-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-3);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.2;
+  color: var(--text);
+}
+.profile-pick input {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin: 0 6px 0 0;
+  vertical-align: middle;
+}
+.profile-pick-name {
+  font-weight: 500;
+  flex: 0 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.profile-pick-path {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
 /* Markdown formatting inside assistant bubbles. The bubble base sets
    white-space: pre-wrap for literal text — markdown manages its own block
    spacing, so reset it here or every source newline doubles up. */

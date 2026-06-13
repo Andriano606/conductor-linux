@@ -2,13 +2,21 @@ import { app } from 'electron'
 import { randomUUID } from 'crypto'
 import { basename, join } from 'path'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
-import type { ChatSession, CustomPrompt, Project, Settings, Workspace } from '../shared/types'
+import type {
+  ChatSession,
+  ClaudeProfile,
+  CustomPrompt,
+  Project,
+  Settings,
+  Workspace
+} from '../shared/types'
 
 interface PersistedData {
   settings: Settings
   projects: Project[]
   workspaces: Workspace[]
   customPrompts: CustomPrompt[]
+  claudeProfiles: ClaudeProfile[]
 }
 
 let dataPath = ''
@@ -24,7 +32,8 @@ function defaults(): PersistedData {
     },
     projects: [],
     workspaces: [],
-    customPrompts: []
+    customPrompts: [],
+    claudeProfiles: []
   }
 }
 
@@ -95,8 +104,10 @@ function migrate(parsed: Record<string, unknown>): PersistedData {
 
   // The prompt library is a flat global collection; older files predate it.
   const customPrompts = (parsed.customPrompts as CustomPrompt[]) ?? []
+  // Named CLAUDE_CONFIG_DIR profiles; older files predate them.
+  const claudeProfiles = (parsed.claudeProfiles as ClaudeProfile[]) ?? []
 
-  return { settings, projects, workspaces, customPrompts }
+  return { settings, projects, workspaces, customPrompts, claudeProfiles }
 }
 
 export function initStore(): void {
@@ -177,6 +188,30 @@ export function updateCustomPrompt(prompt: CustomPrompt): CustomPrompt | undefin
 
 export function removeCustomPrompt(id: string): void {
   data.customPrompts = data.customPrompts.filter((p) => p.id !== id)
+  persist()
+}
+
+// ---- Claude config profiles (named CLAUDE_CONFIG_DIR list) ----
+export function getClaudeProfiles(): ClaudeProfile[] {
+  return data.claudeProfiles
+}
+
+export function addClaudeProfile(profile: ClaudeProfile): void {
+  data.claudeProfiles.push(profile)
+  persist()
+}
+
+/** Replace a profile by id (no-op if it's gone). Returns the stored profile. */
+export function updateClaudeProfile(profile: ClaudeProfile): ClaudeProfile | undefined {
+  const i = data.claudeProfiles.findIndex((p) => p.id === profile.id)
+  if (i === -1) return undefined
+  data.claudeProfiles[i] = profile
+  persist()
+  return profile
+}
+
+export function removeClaudeProfile(id: string): void {
+  data.claudeProfiles = data.claudeProfiles.filter((p) => p.id !== id)
   persist()
 }
 
@@ -280,7 +315,7 @@ export function updateSessionSessionId(id: string, sessionId: string | undefined
  */
 export function updateSessionClaudeParams(
   id: string,
-  patch: { model?: string; effort?: string; permissionMode?: string }
+  patch: { model?: string; effort?: string; permissionMode?: string; profileId?: string }
 ): void {
   const found = findSession(id)
   if (!found) return
@@ -296,6 +331,10 @@ export function updateSessionClaudeParams(
   }
   if ('permissionMode' in patch && session.claudePermissionMode !== patch.permissionMode) {
     session.claudePermissionMode = patch.permissionMode
+    changed = true
+  }
+  if ('profileId' in patch && session.claudeConfigProfileId !== patch.profileId) {
+    session.claudeConfigProfileId = patch.profileId
     changed = true
   }
   if (changed) persist()

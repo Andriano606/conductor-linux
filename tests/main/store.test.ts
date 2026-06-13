@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import type { CustomPrompt, Project, Settings, Workspace } from '../../src/shared/types'
+import type { ClaudeProfile, CustomPrompt, Project, Settings, Workspace } from '../../src/shared/types'
 
 // app.getPath is the only electron surface store.ts touches.
 const h = vi.hoisted(() => ({ userData: '', home: '' }))
@@ -11,11 +11,13 @@ vi.mock('electron', () => ({
 }))
 
 import {
+  addClaudeProfile,
   addCustomPrompt,
   addProject,
   addSession,
   addWorkspace,
   findSession,
+  getClaudeProfiles,
   getCustomPrompts,
   getProject,
   getProjects,
@@ -24,12 +26,14 @@ import {
   getWorkspaces,
   initStore,
   nextPort,
+  removeClaudeProfile,
   removeCustomPrompt,
   removeProject,
   removeSession,
   removeWorkspace,
   renameSession,
   setSettings,
+  updateClaudeProfile,
   updateCustomPrompt,
   updateProject,
   updateSessionClaudeParams,
@@ -73,6 +77,14 @@ const mkPrompt = (over: Partial<CustomPrompt> = {}): CustomPrompt => ({
   content: 'body',
   createdAt: 0,
   updatedAt: 0,
+  ...over
+})
+
+const mkProfile = (over: Partial<ClaudeProfile> = {}): ClaudeProfile => ({
+  id: over.id ?? 'pr-' + Math.random().toString(36).slice(2),
+  name: 'profile',
+  path: '/home/u/.claude',
+  createdAt: 0,
   ...over
 })
 
@@ -230,6 +242,24 @@ describe('initStore', () => {
     initStore()
     expect(getCustomPrompts().map((p) => p.id)).toEqual(['x'])
   })
+
+  it('defaults claudeProfiles to [] for a file predating config profiles', () => {
+    writeFileSync(
+      dataFile(),
+      JSON.stringify({ settings: { startPort: 3002 }, projects: [], workspaces: [] })
+    )
+    initStore()
+    expect(getClaudeProfiles()).toEqual([])
+  })
+
+  it('loads persisted claudeProfiles', () => {
+    writeFileSync(
+      dataFile(),
+      JSON.stringify({ settings: {}, projects: [], workspaces: [], claudeProfiles: [mkProfile({ id: 'x' })] })
+    )
+    initStore()
+    expect(getClaudeProfiles().map((p) => p.id)).toEqual(['x'])
+  })
 })
 
 describe('settings persistence', () => {
@@ -310,6 +340,33 @@ describe('custom prompt CRUD', () => {
   })
 })
 
+describe('claude config profile CRUD', () => {
+  beforeEach(() => initStore())
+
+  it('adds and reads profiles, persisting to disk', () => {
+    addClaudeProfile(mkProfile({ id: 'a', name: 'work' }))
+    addClaudeProfile(mkProfile({ id: 'b', name: 'research' }))
+    expect(getClaudeProfiles().map((p) => p.id)).toEqual(['a', 'b'])
+    expect(JSON.parse(readFileSync(dataFile(), 'utf8')).claudeProfiles).toHaveLength(2)
+  })
+
+  it('updateClaudeProfile replaces by id and returns it; unknown id is a no-op', () => {
+    addClaudeProfile(mkProfile({ id: 'a', path: '/old' }))
+    const saved = updateClaudeProfile(mkProfile({ id: 'a', path: '/new' }))
+    expect(saved?.path).toBe('/new')
+    expect(getClaudeProfiles()[0]).toMatchObject({ path: '/new' })
+    expect(updateClaudeProfile(mkProfile({ id: 'missing' }))).toBeUndefined()
+  })
+
+  it('removes a profile; removing an unknown id is a no-op', () => {
+    addClaudeProfile(mkProfile({ id: 'a' }))
+    removeClaudeProfile('missing')
+    expect(getClaudeProfiles()).toHaveLength(1)
+    removeClaudeProfile('a')
+    expect(getClaudeProfiles()).toHaveLength(0)
+  })
+})
+
 describe('workspace CRUD', () => {
   beforeEach(() => initStore())
 
@@ -384,6 +441,18 @@ describe('workspace CRUD', () => {
       claudePermissionMode: 'default'
     })
     expect(() => updateSessionClaudeParams('missing', { model: 'x' })).not.toThrow()
+  })
+
+  it('updateSessionClaudeParams persists and can clear the config profile id', () => {
+    addWorkspace(mkWs({ id: 'a' }))
+    updateSessionClaudeParams('a', { profileId: 'work' })
+    expect(getWorkspace('a')?.sessions[0].claudeConfigProfileId).toBe('work')
+    expect(
+      JSON.parse(readFileSync(dataFile(), 'utf8')).workspaces[0].sessions[0].claudeConfigProfileId
+    ).toBe('work')
+    // Passing undefined for the key clears it (revert to default ~/.claude).
+    updateSessionClaudeParams('a', { profileId: undefined })
+    expect(getWorkspace('a')?.sessions[0].claudeConfigProfileId).toBeUndefined()
   })
 })
 
