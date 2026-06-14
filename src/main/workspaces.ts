@@ -1,6 +1,7 @@
 import { execFile } from 'child_process'
 import { randomUUID } from 'crypto'
-import { existsSync, mkdirSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync } from 'fs'
+import { homedir } from 'os'
 import { basename, join } from 'path'
 import { promisify } from 'util'
 import type { ChatSession, Project, ProjectScripts, Workspace } from '../shared/types'
@@ -55,6 +56,28 @@ import {
 import { reapWorkspaceProcesses } from './procReaper'
 
 /**
+ * The project's local-scoped MCP servers as a `--mcp-config` JSON string, or
+ * undefined when there are none. They live in the Claude config file keyed by the
+ * REPO path (`projects[repoPath].mcpServers`), but chat sessions run in the worktree
+ * cwd, so without this they'd never load. Reads the profile's config dir when set,
+ * else ~/.claude.json. Best-effort: any read/parse error yields undefined.
+ */
+export function projectMcpConfig(repoPath: string, configDir?: string): string | undefined {
+  try {
+    const file = join(configDir ?? homedir(), '.claude.json')
+    if (!existsSync(file)) return undefined
+    const data = JSON.parse(readFileSync(file, 'utf8')) as {
+      projects?: Record<string, { mcpServers?: Record<string, unknown> }>
+    }
+    const servers = data.projects?.[repoPath]?.mcpServers
+    if (!servers || Object.keys(servers).length === 0) return undefined
+    return JSON.stringify({ mcpServers: servers })
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Spawn (idempotently) the Claude chat process for one session of a workspace,
  * wiring its cwd/env and the persisted resume id + model/effort/permission-mode.
  * The chat key is the session id.
@@ -74,7 +97,8 @@ function startSessionChat(ws: Workspace, project: Project, session: ChatSession)
     model: session.claudeModel,
     effort: session.claudeEffort,
     permissionMode: session.claudePermissionMode,
-    configDir: profile?.path
+    configDir: profile?.path,
+    mcpConfig: projectMcpConfig(project.repoPath, profile?.path)
   })
 }
 
@@ -598,6 +622,77 @@ export function handleChatAuth(
     .catch((err: { stderr?: string; message?: string }) =>
       chatInfo(sessionId, `Помилка: ${String(err?.stderr || err?.message || err).trim()}`)
     )
+}
+
+/**
+ * Authenticate an MCP server for a chat session. MCP OAuth has no non-interactive
+ * subcommand, so — like /login — this opens the workspace Terminal running an
+ * interactive `claude` (with the same --mcp-config so the server is visible) and
+ * tells the user to drive its /mcp panel. After auth, restarting the session
+ * reconnects (status flips needs-auth → connected on the next init event).
+ */
+export function handleChatMcpAuth(sessionId: string, serverName: string): void {
+  const found = findSession(sessionId)
+  if (!found) return
+  const { ws, session } = found
+  const project = getProject(ws.projectId)
+  if (!project) return
+  if (ws.status === 'archived' || !existsSync(ws.path)) {
+    chatInfo(sessionId, 'Робочий простір недоступний.')
+    return
+  }
+  const configDir = session.claudeConfigProfileId
+    ? getClaudeProfiles().find((p) => p.id === session.claudeConfigProfileId)?.path
+    : undefined
+  ensureShell(ws.id) // idempotent; uses buildEnv (cwd = worktree)
+  const prefix = configDir ? `CLAUDE_CONFIG_DIR=${shq(configDir)} ` : ''
+  const mcp = projectMcpConfig(project.repoPath, configDir)
+  const mcpArg = mcp ? ` --mcp-config ${shq(mcp)}` : ''
+  write(ws.id, 'shell', `${prefix}claude${mcpArg}\n`)
+  focusTerminal(ws.id, 'shell')
+  chatInfo(
+    sessionId,
+    `Відкрив «Термінал». Виконай /mcp → обери «${serverName}» → авторизуйся в браузері. ` +
+      'Потім перезапусти сесію (напр. /model), щоб застосувати.'
+  )
+}
+
+/**
+ * /mcp → ➕ Add: open the workspace Terminal so the user can register a new MCP
+ * server with `claude mcp add`. Each custom CLAUDE_CONFIG_DIR profile starts with
+ * no servers, so this is the bootstrap path. `add`/`add-json` ARE non-interactive,
+ * but a server's transport/url/headers vary too much for a picker — so we just
+ * export this session's CLAUDE_CONFIG_DIR into the shell and hand it over. Adding
+ * with `--scope user` writes to the profile's top-level mcpServers, which the CLI
+ * loads automatically for every session under that config dir after a restart
+ * (no --mcp-config needed). Mirrors handleChatMcpAuth's Terminal hand-off.
+ */
+export function handleChatMcpAdd(sessionId: string): void {
+  const found = findSession(sessionId)
+  if (!found) return
+  const { ws, session } = found
+  const project = getProject(ws.projectId)
+  if (!project) return
+  if (ws.status === 'archived' || !existsSync(ws.path)) {
+    chatInfo(sessionId, 'Робочий простір недоступний.')
+    return
+  }
+  const configDir = session.claudeConfigProfileId
+    ? getClaudeProfiles().find((p) => p.id === session.claudeConfigProfileId)?.path
+    : undefined
+  ensureShell(ws.id) // idempotent; uses buildEnv (cwd = worktree)
+  // Export so the user's `claude mcp add` targets THIS profile's config, not the
+  // default ~/.claude.json. Persists for the shell session, so `claude mcp list`
+  // etc. also see the right config.
+  if (configDir) write(ws.id, 'shell', `export CLAUDE_CONFIG_DIR=${shq(configDir)}\n`)
+  focusTerminal(ws.id, 'shell')
+  chatInfo(
+    sessionId,
+    'Відкрив «Термінал»' +
+      (configDir ? ' із CLAUDE_CONFIG_DIR цього профілю' : '') +
+      '. Додай сервер, напр.: claude mcp add --scope user --transport sse <назва> <url>. ' +
+      'Потім перезапусти сесію (напр. /model), щоб підхопити.'
+  )
 }
 
 /** Run the configured run script in the workspace (does not wait for it). */

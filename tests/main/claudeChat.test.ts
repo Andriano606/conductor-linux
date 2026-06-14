@@ -18,6 +18,8 @@ import {
   interruptChat,
   killAllChats,
   killChat,
+  onChatMcpAdd,
+  onChatMcpAuth,
   onChatParams,
   onChatSessionId,
   sendChatMessage,
@@ -427,7 +429,7 @@ const answerInitialize = (payload: Record<string, unknown>): void => {
 }
 
 /** App-owned commands merged into the list — filtered out when asserting CLI-only behavior. */
-const LOCAL_NAMES = new Set(['model', 'effort', 'plan', 'login', 'logout', 'status'])
+const LOCAL_NAMES = new Set(['model', 'effort', 'plan', 'login', 'logout', 'status', 'mcp'])
 const cliOnly = (cmds?: { name: string }[]): { name: string }[] =>
   (cmds ?? []).filter((c) => !LOCAL_NAMES.has(c.name))
 
@@ -461,7 +463,8 @@ describe('slash commands', () => {
       'plan',
       'login',
       'logout',
-      'status'
+      'status',
+      'mcp' // always offered (carries the ➕ Add option even with no servers)
     ])
     expect(cmds[0]).toMatchObject({ description: 'Clear conversation history', argumentHint: '[name]' })
     expect(cmds[2]).toMatchObject({ name: 'model', argumentHint: '[model]' })
@@ -482,7 +485,8 @@ describe('slash commands', () => {
       'plan',
       'login',
       'logout',
-      'status'
+      'status',
+      'mcp'
     ])
   })
 
@@ -1098,6 +1102,104 @@ describe('transcript persistence', () => {
       }
     })
     expect(attachChat('w1').items.filter((it) => it.role === 'info')).toHaveLength(0)
+  })
+})
+
+describe('/mcp command', () => {
+  /** Feed a system/init event carrying mcp servers (+ optional tools and slash commands). */
+  const initWithMcp = (
+    mcpServers: unknown[],
+    tools: unknown[] = [],
+    slash: string[] = ['clear']
+  ): void => {
+    last().line({
+      type: 'system',
+      subtype: 'init',
+      session_id: 's1',
+      mcp_servers: mcpServers,
+      tools,
+      slash_commands: slash
+    })
+  }
+  const mcpInfo = (): string =>
+    attachChat('w1')
+      .items.filter((it) => it.role === 'info')
+      .map((it) => it.text)
+      .join('\n')
+
+  it('is offered even with no MCP servers (so a fresh profile can add the first)', () => {
+    startChat(baseOpts)
+    initWithMcp([])
+    expect((attachChat('w1').commands ?? []).some((c) => c.name === 'mcp')).toBe(true)
+  })
+
+  it('is offered (with status + tool count) when servers are present', () => {
+    startChat(baseOpts)
+    initWithMcp(
+      [{ name: 'linear', status: 'needs-auth' }],
+      ['mcp__linear__create_issue', 'mcp__linear__list_issues', 'Bash']
+    )
+    expect((attachChat('w1').commands ?? []).some((c) => c.name === 'mcp')).toBe(true)
+  })
+
+  it('bare /mcp opens a picker: the ➕ Add option first, then the servers', () => {
+    startChat(baseOpts)
+    initWithMcp([
+      { name: 'linear', status: 'needs-auth' },
+      { name: 'github', status: 'connected' }
+    ])
+    sendChatMessage('w1', '/mcp')
+    const pending = lastPending()
+    expect(pending?.kind).toBe('question')
+    const labels =
+      pending?.kind === 'question' ? pending.questions[0].options.map((o) => o.label) : []
+    expect(labels).toEqual(['➕ Додати сервер', '! linear', '✓ github'])
+  })
+
+  it('/mcp add delegates to the add sink (opens the Terminal)', () => {
+    const addSink = vi.fn()
+    onChatMcpAdd(addSink)
+    startChat(baseOpts)
+    initWithMcp([])
+    sendChatMessage('w1', '/mcp add')
+    expect(addSink).toHaveBeenCalledWith('w1')
+    onChatMcpAdd(() => {})
+  })
+
+  it('picking a connected server lists its tools in the transcript', () => {
+    startChat(baseOpts)
+    initWithMcp(
+      [{ name: 'github', status: 'connected' }],
+      ['mcp__github__create_pr', 'mcp__github__list_repos']
+    )
+    sendChatMessage('w1', '/mcp')
+    const pending = lastPending()
+    const q = pending?.kind === 'question' ? pending.questions[0].question : ''
+    answerChat('w1', { kind: 'question', requestId: pending!.requestId, answers: { [q]: '✓ github' } })
+    const text = mcpInfo()
+    expect(text).toContain('MCP «github»')
+    expect(text).toContain('create_pr')
+    expect(text).toContain('list_repos')
+  })
+
+  it('selecting a needs-auth server delegates to the auth sink', () => {
+    const sink = vi.fn()
+    onChatMcpAuth(sink)
+    startChat(baseOpts)
+    initWithMcp([{ name: 'linear', status: 'needs-auth' }])
+    // Inline form goes straight through apply → mcpAction → the auth sink.
+    sendChatMessage('w1', '/mcp linear')
+    expect(sink).toHaveBeenCalledWith('w1', 'linear')
+    onChatMcpAuth(() => {})
+  })
+
+  it('re-captures server status on the next init (needs-auth → connected)', () => {
+    startChat(baseOpts)
+    initWithMcp([{ name: 'linear', status: 'needs-auth' }])
+    // A later init (e.g. after authenticating + restart) reports it connected.
+    initWithMcp([{ name: 'linear', status: 'connected' }], ['mcp__linear__create_issue'])
+    sendChatMessage('w1', '/mcp linear')
+    expect(mcpInfo()).toContain('MCP «linear» (✓ підключено)')
   })
 })
 

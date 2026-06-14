@@ -109,7 +109,9 @@ const ptym = vi.hoisted(() => ({
   runTask: vi.fn(async () => 0),
   startShell: vi.fn(),
   killWorkspace: vi.fn(),
-  stopTask: vi.fn()
+  stopTask: vi.fn(),
+  focusTerminal: vi.fn(),
+  write: vi.fn()
 }))
 vi.mock('../../src/main/ptyManager', () => ptym)
 
@@ -118,14 +120,19 @@ const chat = vi.hoisted(() => ({
   killChat: vi.fn(),
   stopChatProc: vi.fn(),
   deleteChatHistory: vi.fn(),
-  setChatConfigDir: vi.fn()
+  setChatConfigDir: vi.fn(),
+  chatInfo: vi.fn()
 }))
 vi.mock('../../src/main/claudeChat', () => chat)
 
 const reaper = vi.hoisted(() => ({ reapWorkspaceProcesses: vi.fn(async () => [] as number[]) }))
 vi.mock('../../src/main/procReaper', () => reaper)
 
-const fsm = vi.hoisted(() => ({ existsSync: vi.fn(() => false), mkdirSync: vi.fn() }))
+const fsm = vi.hoisted(() => ({
+  existsSync: vi.fn(() => false),
+  mkdirSync: vi.fn(),
+  readFileSync: vi.fn(() => '')
+}))
 vi.mock('fs', () => fsm)
 
 import {
@@ -138,7 +145,10 @@ import {
   deleteProject,
   finishArchive,
   finishSetup,
+  handleChatMcpAdd,
+  handleChatMcpAuth,
   killWorkspaceProcesses,
+  projectMcpConfig,
   projectNameFromPath,
   renameWorkspaceBranch,
   rerunSetup,
@@ -250,6 +260,94 @@ describe('projectNameFromPath', () => {
   it('takes the last path segment, ignoring trailing slashes', () => {
     expect(projectNameFromPath('/home/me/cool-app')).toBe('cool-app')
     expect(projectNameFromPath('/home/me/cool-app/')).toBe('cool-app')
+  })
+})
+
+describe('projectMcpConfig', () => {
+  const cfg = (servers: unknown) =>
+    JSON.stringify({ projects: { '/repo': { mcpServers: servers } } })
+
+  it("serializes the repo path's MCP servers as a --mcp-config JSON string", () => {
+    fsm.existsSync.mockReturnValue(true)
+    fsm.readFileSync.mockReturnValue(cfg({ linear: { type: 'sse', url: 'https://x' } }))
+    expect(projectMcpConfig('/repo', '/profile')).toBe(
+      JSON.stringify({ mcpServers: { linear: { type: 'sse', url: 'https://x' } } })
+    )
+    // Reads the profile's config dir when one is given.
+    expect(fsm.readFileSync).toHaveBeenCalledWith('/profile/.claude.json', 'utf8')
+  })
+
+  it('returns undefined when the project has no servers', () => {
+    fsm.existsSync.mockReturnValue(true)
+    fsm.readFileSync.mockReturnValue(cfg({}))
+    expect(projectMcpConfig('/repo')).toBeUndefined()
+  })
+
+  it('returns undefined when the config file is absent', () => {
+    fsm.existsSync.mockReturnValue(false)
+    expect(projectMcpConfig('/repo')).toBeUndefined()
+  })
+
+  it('returns undefined (not a throw) on malformed JSON', () => {
+    fsm.existsSync.mockReturnValue(true)
+    fsm.readFileSync.mockReturnValue('{broken')
+    expect(projectMcpConfig('/repo')).toBeUndefined()
+  })
+})
+
+describe('handleChatMcpAdd', () => {
+  it("opens the Terminal with the session's CLAUDE_CONFIG_DIR exported", () => {
+    fsm.existsSync.mockReturnValue(true)
+    store._setProfiles([{ id: 'pr1', name: 'work', path: '/home/u/.claude-work', createdAt: 0 }])
+    store._set({ ...settings }, [mkProject()], [
+      mkWs({ id: 'a', status: 'active', sessions: [{ id: 'a', createdAt: 0, claudeConfigProfileId: 'pr1' }] })
+    ])
+    handleChatMcpAdd('a')
+    expect(ptym.startShell).toHaveBeenCalled()
+    expect(ptym.write).toHaveBeenCalledWith('a', 'shell', "export CLAUDE_CONFIG_DIR='/home/u/.claude-work'\n")
+    expect(ptym.focusTerminal).toHaveBeenCalledWith('a', 'shell')
+  })
+
+  it('skips the export when the session has no profile', () => {
+    fsm.existsSync.mockReturnValue(true)
+    store._setProfiles([])
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', status: 'active' })])
+    handleChatMcpAdd('a')
+    expect(ptym.write).not.toHaveBeenCalled()
+    expect(ptym.focusTerminal).toHaveBeenCalledWith('a', 'shell')
+  })
+
+  it('refuses (info, no Terminal) when the workspace is unavailable', () => {
+    fsm.existsSync.mockReturnValue(false) // worktree dir gone
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', status: 'archived' })])
+    handleChatMcpAdd('a')
+    expect(ptym.focusTerminal).not.toHaveBeenCalled()
+    expect(chat.chatInfo).toHaveBeenCalledWith('a', 'Робочий простір недоступний.')
+  })
+})
+
+describe('handleChatMcpAuth', () => {
+  it('opens an interactive claude in the Terminal (with the profile prefix) for the OAuth flow', () => {
+    fsm.existsSync.mockReturnValue(true)
+    store._setProfiles([{ id: 'pr1', name: 'work', path: '/home/u/.claude-work', createdAt: 0 }])
+    store._set({ ...settings }, [mkProject()], [
+      mkWs({ id: 'a', status: 'active', sessions: [{ id: 'a', createdAt: 0, claudeConfigProfileId: 'pr1' }] })
+    ])
+    handleChatMcpAuth('a', 'linear')
+    expect(ptym.startShell).toHaveBeenCalled()
+    // No usable --mcp-config in this test (readFileSync mock isn't valid JSON), so
+    // it's a bare `claude` behind the profile's CLAUDE_CONFIG_DIR prefix.
+    expect(ptym.write).toHaveBeenCalledWith('a', 'shell', "CLAUDE_CONFIG_DIR='/home/u/.claude-work' claude\n")
+    expect(ptym.focusTerminal).toHaveBeenCalledWith('a', 'shell')
+    expect(chat.chatInfo).toHaveBeenCalledWith('a', expect.stringContaining('linear'))
+  })
+
+  it('refuses when the workspace is unavailable', () => {
+    fsm.existsSync.mockReturnValue(false)
+    store._set({ ...settings }, [mkProject()], [mkWs({ id: 'a', status: 'archived' })])
+    handleChatMcpAuth('a', 'linear')
+    expect(ptym.focusTerminal).not.toHaveBeenCalled()
+    expect(chat.chatInfo).toHaveBeenCalledWith('a', 'Робочий простір недоступний.')
   })
 })
 

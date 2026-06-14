@@ -91,6 +91,14 @@ interface Entry {
    * text is rendered as the assistant's reply instead of being dropped.
    */
   turnHadText?: boolean
+  /**
+   * MCP servers reported by the CLI's init event (re-captured on every respawn) —
+   * drives the local /mcp command's status picker. tools = the server's tool names
+   * derived from the init `tools` list (mcp__<server>__<tool>).
+   */
+  mcpServers?: { name: string; status: string; tools: string[] }[]
+  /** Last CLI command list passed to setCommands, so it can be re-merged when mcpServers changes. */
+  cliCommands?: ChatCommand[]
 }
 
 export interface StartOpts {
@@ -107,6 +115,11 @@ export interface StartOpts {
   permissionMode?: string
   /** CLAUDE_CONFIG_DIR for this session (a named profile); unset ⇒ default. */
   configDir?: string
+  /**
+   * Inline `--mcp-config` JSON (`{"mcpServers":{…}}`) so the project's local-scoped
+   * MCP servers load in the worktree session; unset ⇒ none. See projectMcpConfig.
+   */
+  mcpConfig?: string
 }
 
 /** Patch persisted by the local /model, /effort, /plan commands. */
@@ -133,6 +146,10 @@ let sessionIdSink: (id: string, sessionId: string | undefined) => void = () => {
 let paramsSink: (id: string, patch: ParamsPatch) => void = () => {}
 /** Handles the auth local commands (/login, /logout, /status) — wired in main. */
 let authSink: (sessionId: string, action: AuthAction, useConsole?: boolean) => void = () => {}
+/** Handles /mcp authentication (opens the Terminal for the OAuth flow) — wired in main. */
+let mcpAuthSink: (sessionId: string, serverName: string) => void = () => {}
+/** Handles /mcp → ➕ Add (opens the Terminal preconfigured for `claude mcp add`) — wired in main. */
+let mcpAddSink: (sessionId: string) => void = () => {}
 /** Directory transcripts are persisted to; null (tests) = memory only. */
 let storageDir: string | null = null
 
@@ -152,6 +169,14 @@ export function onChatAuth(
   cb: (sessionId: string, action: AuthAction, useConsole?: boolean) => void
 ): void {
   authSink = cb
+}
+
+export function onChatMcpAuth(cb: (sessionId: string, serverName: string) => void): void {
+  mcpAuthSink = cb
+}
+
+export function onChatMcpAdd(cb: (sessionId: string) => void): void {
+  mcpAddSink = cb
 }
 
 /** Push an info line into a session's transcript (used by the auth handler). */
@@ -356,6 +381,11 @@ function buildCommand(opts: StartOpts): string {
     'stdio'
   ]
   if (opts.resume) fixed.push('--resume', opts.resume)
+  // Inject the project's MCP servers (they're keyed to the repo path, not the
+  // worktree cwd, so they wouldn't load otherwise). --mcp-config MERGES with the
+  // CLI's own sources, so user-scoped servers keep loading; a user can still pass
+  // --strict-mcp-config via claudeArgs to override.
+  if (opts.mcpConfig) fixed.push('--mcp-config', opts.mcpConfig)
   // Runtime overrides last so a /model or /effort choice wins over any --model
   // the user put in settings.claudeArgs.
   const tail: string[] = []
@@ -430,6 +460,31 @@ function parseModels(raw: unknown): ModelInfo[] {
         ? (m.supportedEffortLevels as unknown[]).filter((l): l is string => typeof l === 'string')
         : undefined
     }))
+}
+
+/**
+ * MCP servers from the init event (`mcp_servers: [{name, status}]`), enriched
+ * with each server's tool names derived from the init `tools` list — every entry
+ * named `mcp__<server>__<tool>` belongs to `<server>`.
+ */
+function parseMcpServers(
+  raw: unknown,
+  tools: unknown
+): { name: string; status: string; tools: string[] }[] {
+  if (!Array.isArray(raw)) return []
+  const toolNames = Array.isArray(tools) ? tools.filter((t): t is string => typeof t === 'string') : []
+  return raw
+    .filter((s): s is Record<string, unknown> => !!s && typeof s === 'object')
+    .filter((s) => typeof s.name === 'string' && typeof s.status === 'string')
+    .map((s) => {
+      const name = s.name as string
+      const prefix = `mcp__${name}__`
+      return {
+        name,
+        status: s.status as string,
+        tools: toolNames.filter((t) => t.startsWith(prefix)).map((t) => t.slice(prefix.length))
+      }
+    })
 }
 
 /** The model currently in effect for this session ('default' when unset). */
@@ -527,8 +582,84 @@ const LOCAL_COMMANDS: LocalCommand[] = [
     argumentHint: '',
     choices: () => [],
     run: (id) => authSink(id, 'status')
+  },
+  {
+    // MCP servers reported by the CLI's init event, plus a synthetic "➕ Add"
+    // entry that is ALWAYS present — so the command is never hidden (the headless
+    // CLI doesn't own /mcp, which would otherwise reject it as TUI-only). Bootstrap
+    // matters because each custom CLAUDE_CONFIG_DIR profile starts with no servers.
+    // Picking Add opens the Terminal for `claude mcp add`; picking a connected
+    // server shows its tools; a needs-auth/failed one opens the Terminal for auth.
+    name: 'mcp',
+    description: 'MCP-сервери: додати / показати статус / автентифікувати',
+    argumentHint: '[add|server]',
+    choices: (e) => [
+      { value: MCP_ADD, label: '➕ Додати сервер', description: 'Відкрити «Термінал» для claude mcp add' },
+      ...(e.mcpServers ?? []).map((s) => ({
+        value: s.name,
+        label: `${mcpIcon(s.status)} ${s.name}`,
+        description: `${mcpStatusText(s.status)} · ${s.tools.length} інстр.`
+      }))
+    ],
+    apply: (id, e, name) => mcpAction(id, e, name)
   }
 ]
+
+/** Sentinel value of the synthetic "➕ Add server" choice (also typeable as `/mcp add`). */
+const MCP_ADD = 'add'
+
+/** Status glyph for an MCP server, matching the TUI's connected/needs-auth/failed states. */
+function mcpIcon(status: string): string {
+  switch (status) {
+    case 'connected':
+      return '✓'
+    case 'needs-auth':
+      return '!'
+    case 'failed':
+      return '✗'
+    default:
+      return '⏸' // pending / connecting / unknown
+  }
+}
+
+/** Human-readable (Ukrainian) status for an MCP server. */
+function mcpStatusText(status: string): string {
+  switch (status) {
+    case 'connected':
+      return 'підключено'
+    case 'needs-auth':
+      return 'потрібна автентифікація'
+    case 'failed':
+      return 'помилка підключення'
+    case 'pending':
+    case 'connecting':
+      return 'підключення…'
+    default:
+      return status
+  }
+}
+
+/**
+ * /mcp picked a server: a connected one lists its tools in the transcript; an
+ * unauthenticated/failed one delegates to the auth sink (opens the Terminal for
+ * the browser OAuth flow — there is no non-interactive `claude mcp auth`).
+ */
+function mcpAction(id: string, e: Entry, name: string): void {
+  if (name === MCP_ADD) {
+    mcpAddSink(id)
+    return
+  }
+  const server = (e.mcpServers ?? []).find((s) => s.name === name)
+  if (!server) return
+  if (server.status === 'connected') {
+    const tools = server.tools.length
+      ? server.tools.map((t) => `• ${t}`).join('\n')
+      : 'інструментів немає'
+    info(id, e, `MCP «${name}» (✓ підключено):\n${tools}`)
+    return
+  }
+  mcpAuthSink(id, name)
+}
 
 /** Apply a model/effort choice: persist it and restart the session, resuming. */
 function applyParam(id: string, e: Entry, key: 'model' | 'effort', value: string): void {
@@ -960,6 +1091,14 @@ function handleLine(id: string, e: Entry, line: string): void {
         // Capture models here too so the local /model, /effort pickers work even
         // on a CLI old enough to lack the initialize handshake.
         if (!e.models && Array.isArray(msg.models)) e.models = parseModels(msg.models)
+        // MCP servers + their tool names — drives the local /mcp picker. Re-read on
+        // every (re)spawn so status (e.g. needs-auth → connected after auth) stays fresh.
+        if (Array.isArray(msg.mcp_servers)) {
+          e.mcpServers = parseMcpServers(msg.mcp_servers, msg.tools)
+          // Re-merge the command list so /mcp appears/updates even if this init
+          // event arrived AFTER the command list was first built (or on a respawn).
+          if (e.cliCommands) setCommands(id, e, e.cliCommands)
+        }
         // Bare fallback for the command list — initialize (with descriptions)
         // normally beats this; don't let names-only overwrite it.
         if (!e.commands && Array.isArray(msg.slash_commands)) {
@@ -1100,6 +1239,7 @@ function enforcePermissionMode(e: Entry): void {
  * owned names is remembered so dispatchLocalCommand only intercepts those.
  */
 function setCommands(id: string, e: Entry, cliCommands: ChatCommand[]): void {
+  e.cliCommands = cliCommands
   const cliNames = new Set(cliCommands.map((c) => c.name))
   const locals = LOCAL_COMMANDS.filter(
     (lc) => !cliNames.has(lc.name) && (!!lc.run || lc.choices(e).length > 0)

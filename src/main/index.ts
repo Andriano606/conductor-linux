@@ -7,12 +7,14 @@ import { killAll, setMainWindow } from './ptyManager'
 import {
   killAllChats,
   onChatAuth,
+  onChatMcpAdd,
+  onChatMcpAuth,
   onChatParams,
   onChatSessionId,
   setChatStorageDir,
   setChatWindow
 } from './claudeChat'
-import { handleChatAuth, restoreSessions } from './workspaces'
+import { handleChatAuth, handleChatMcpAdd, handleChatMcpAuth, restoreSessions } from './workspaces'
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -55,6 +57,8 @@ app.whenReady().then(() => {
   onChatSessionId(updateSessionSessionId)
   onChatParams(updateSessionClaudeParams)
   onChatAuth(handleChatAuth)
+  onChatMcpAuth(handleChatMcpAuth)
+  onChatMcpAdd(handleChatMcpAdd)
   setChatStorageDir(join(app.getPath('userData'), 'chats'))
   registerIpc()
   // Reaps orphaned processes from the previous session before restarting Claude;
